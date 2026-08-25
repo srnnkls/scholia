@@ -1,0 +1,9 @@
+*.elc
+/annotate-autoloads.el
+/annotate-pkg.el
+
+/.eask
+/dist
+
+/scopes/
+/.peer/
