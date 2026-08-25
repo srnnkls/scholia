@@ -20,8 +20,26 @@
      (unless (featurep 'scholia) (kill-emacs 3))
      (when (featurep 'magit-section) (kill-emacs 4))
      (when (featurep 'org-remark) (kill-emacs 5))
+     (let ((scholia-session-directory (make-temp-file "scholia-smoke-" t))
+           (file (make-temp-file "scholia-smoke-" nil ".txt" "alpha beta\n")))
+       (unwind-protect
+           (with-current-buffer (find-file-noselect file)
+             (scholia-mode 1)
+             (unless scholia-mode (kill-emacs 6))
+             (goto-char (point-min))
+             (scholia-annotate "note")
+             (unless (scholia-annotation-at (point-min)) (kill-emacs 7))
+             (scholia-mode -1)
+             (when scholia-mode (kill-emacs 8))
+             (set-buffer-modified-p nil)
+             (kill-buffer))
+         (delete-file file)
+         (delete-directory scholia-session-directory t)))
      (kill-emacs 0))
-  "Form a vanilla subprocess evaluates to prove scholia loads on its own.")
+  "Form a vanilla subprocess evaluates to prove scholia works on its own.
+Loading the feature is not enough: command `scholia-mode' is autoloaded
+from the leaf module, so only driving it in a file-visiting buffer
+reaches the lifecycle the leaf does not define itself.")
 
 (ert-deftest scholia-smoke-package-loads-without-optional-dependencies ()
   (let ((emacs (expand-file-name invocation-name invocation-directory))

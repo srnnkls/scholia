@@ -19,6 +19,8 @@
 (declare-function scholia-annotate "scholia-core")
 (declare-function scholia-delete-annotation "scholia-core")
 (declare-function scholia-reply-to "scholia-core")
+(declare-function scholia-initialize "scholia-core")
+(declare-function scholia-shutdown "scholia-core")
 (declare-function scholia-status "scholia-status")
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -66,6 +68,13 @@ the same entry of `scholia-project-sessions'."
   "Function returning the root of the current project, or nil.
 Its value decides which entry of `scholia-project-sessions' applies."
   :type 'function)
+
+(defcustom scholia-autosave t
+  "Whether scholia stores the annotations before it lets go of a buffer.
+Turning command `scholia-mode' off reads it, and so does killing an
+annotated buffer.  Nil leaves storing them to the caller, which then
+owns whatever is on screen when the mode goes down or the buffer dies."
+  :type 'boolean)
 
 
 ;;;; Export and sending
@@ -145,6 +154,11 @@ Applies when a file changed while `scholia-mode' was off."
   "Always increasing index into the annotation face lists.
 Addresses `scholia-highlight-faces' and `scholia-annotation-text-faces'.")
 
+(defvar-local scholia--unplaced-annotations nil
+  "Stored annotations this buffer could not be shown holding.
+Nothing on screen stands for them, so every save folds them back into
+the record as they are rather than writing a record without them.")
+
 
 ;;;; The mode
 
@@ -163,7 +177,11 @@ Annotations are shown alongside the buffer text and stored in a session
 database, leaving the file itself unchanged.
 
 \\{scholia-mode-map}"
-  :lighter " Sch")
+  :lighter " Sch"
+  (require 'scholia-core)
+  (if scholia-mode
+      (scholia-initialize)
+    (scholia-shutdown scholia-autosave)))
 
 
 ;;;; Annotations

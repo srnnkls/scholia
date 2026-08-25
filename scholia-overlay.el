@@ -55,8 +55,9 @@ chain, so the scan reaches the whole buffer."
                     (eq (overlay-get other 'scholia--chain-id) chain-id))
                   (scholia-overlay--annotations)))))
 
-(defun scholia-overlay--chains ()
-  "Return every chain of the current buffer, ordered by where it starts.
+(defun scholia-buffer-chains ()
+  "Return every chain of the current buffer, ordered by where each begins.
+Chains outside the current restriction answer as much as those within.
 Groups the annotations of the whole buffer in one pass, so the cost of
 asking stays that of a single scan however many chains answer."
   (let ((buckets nil))
@@ -132,6 +133,13 @@ after needs no separate setup."
                                   index)))
 
 
+;;;; What a chain carries
+
+(defun scholia-chain-color-index (chain)
+  "Return the index CHAIN addresses `scholia-highlight-faces' with."
+  (overlay-get (car chain) 'scholia--color-index))
+
+
 ;;;; Looking a chain up
 
 (defun scholia-annotation-at (&optional pos)
@@ -155,7 +163,7 @@ inside the current restriction or outside it."
     (and overlay (scholia-overlay--chain-of overlay))))
 
 (defun scholia-chain-first-p (overlay)
-  "Return non-nil when OVERLAY starts the chain it belongs to."
+  "Return non-nil when OVERLAY begins the chain it belongs to."
   (scholia-ensure-annotation (overlay)
     (eq overlay (car (scholia-overlay--chain-of overlay)))))
 
@@ -179,7 +187,7 @@ answers non-nil."
 The chain covering POS is never returned, however many overlays of it
 start after POS."
   (seq-find (lambda (chain) (> (overlay-start (car chain)) pos))
-            (scholia-overlay--chains)))
+            (scholia-buffer-chains)))
 
 (defun scholia-previous-annotation (pos)
   "Return the last chain ending at or before POS, or nil when none does.
@@ -187,13 +195,13 @@ The chain covering POS is never returned, however many overlays of it
 end before POS."
   (car (last (seq-filter (lambda (chain)
                            (<= (overlay-end (car (last chain))) pos))
-                         (scholia-overlay--chains)))))
+                         (scholia-buffer-chains)))))
 
 
 ;;;; Re-chaining after an edit
 
 (defun scholia-overlay--rechain (chain)
-  "Rebuild CHAIN so it holds one overlay per line again.
+  "Rebuild CHAIN so it carries one overlay per line again.
 An edit can leave a chain spanning a newline it did not span before, or
 leave nothing of the annotated text at all, in which case CHAIN goes away
 rather than lingering as a zero-length overlay.  A chain whose lines came
@@ -227,10 +235,16 @@ its last overlay, so an edit on a line the chain covers without holding
 an overlay on it re-chains as any other does.  Runs from
 `after-change-functions' rather than `post-command-hook', so a
 programmatic edit or an undo re-chains just as typing does."
-  (dolist (chain (scholia-overlay--chains))
+  (dolist (chain (scholia-buffer-chains))
     (when (and (<= (overlay-start (car chain)) end)
                (<= beg (overlay-end (car (last chain)))))
       (scholia-overlay--rechain chain))))
+
+(defun scholia-disarm-rechaining ()
+  "Stop re-chaining the annotations of this buffer after an edit.
+Undoes the arming `scholia-create-chain' does, so a buffer whose
+annotations have been taken down carries no hook of ours any more."
+  (remove-hook 'after-change-functions #'scholia-overlay--after-change t))
 
 (provide 'scholia-overlay)
 ;;; scholia-overlay.el ends here

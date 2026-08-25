@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   test:
@@ -42,4 +42,5 @@ jobs:
         run: eask run script test
 
       - name: Checkdoc
-        run: eask lint checkdoc
+        # Without --strict, eask exits 0 while printing its warnings.
+        run: eask lint checkdoc --strict
