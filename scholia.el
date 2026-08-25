@@ -21,5 +21,9 @@
 
 ;;; Code:
 
+(require 'scholia-vars)
+
+;;;###autoload (autoload 'scholia-mode "scholia-vars" nil t)
+
 (provide 'scholia)
 ;;; scholia.el ends here
