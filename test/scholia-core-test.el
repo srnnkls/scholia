@@ -235,6 +235,9 @@ its terminator at 37.")
         (scholia-annotate "on gamma")
         (narrow-to-region 25 37)
         (should (equal (scholia-buffer-checksum) whole))
+        (dolist (coding '(utf-8-dos utf-8-mac utf-8-unix))
+          (let ((buffer-file-coding-system coding))
+            (should (equal (scholia-buffer-checksum) whole))))
         (should-not (equal (scholia-buffer-checksum)
                            (md5 (buffer-substring-no-properties
                                  (point-min) (point-max)))))
@@ -443,8 +446,14 @@ its terminator at 37.")
 
 
 (ert-deftest scholia-core-quitting-emacs-stores-every-annotated-buffer ()
+  "A buffer that cannot be stored must not keep Emacs from quitting.
+`debug-on-error' is bound here because the guard has to hold whatever the
+user has set: `with-demoted-errors' expands to `condition-case-unless-debug'
+and is inert under it, which is how this passed everywhere except the one
+Emacs whose ERT sets the variable."
   (scholia-test-with-session-directory
-    (let ((kill-emacs-hook nil))
+    (let ((kill-emacs-hook nil)
+          (debug-on-error t))
       (scholia-test-with-temp-file-buffer one scholia-core-test--source
         (setq-local scholia-session "quit")
         (scholia-mode 1)

@@ -94,10 +94,12 @@ and save paths without passing one."
 (defun scholia-buffer-checksum ()
   "Return the fingerprint of this buffer as it stands.
 Taken over the whole buffer, so a narrowing does not make the file look
-like one the stored annotations were never written against."
+like one the stored annotations were never written against, and over the
+text as the buffer holds it rather than as the platform would write it,
+so a session written on one system still matches on another."
   (save-restriction
     (widen)
-    (md5 (current-buffer))))
+    (md5 (current-buffer) nil nil 'utf-8-unix t)))
 
 
 ;;;; The identity a chain keeps
@@ -229,9 +231,11 @@ can do about the session and no later run to retry it in, so one that
 cannot be written costs the others nothing."
   (dolist (buffer (scholia-core--annotated-buffers))
     (with-current-buffer buffer
-      (with-demoted-errors "Scholia could not store a buffer: %S"
-        (when scholia-autosave
-          (scholia-save-annotations))))))
+      (condition-case failure
+          (when scholia-autosave
+            (scholia-save-annotations))
+        (error
+         (message "Scholia could not store a buffer: %S" failure))))))
 
 
 ;;;; The mode's two paths

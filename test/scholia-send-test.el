@@ -180,9 +180,13 @@ Each already carries a send of its own to a target no other one went to."
         (remove-hook 'scholia-send-functions listener)))))
 
 (ert-deftest scholia-send-batch-keeps-the-record-when-an-observer-signals ()
+  "The annotations carrying a new send are the only copy of it.
+`debug-on-error' is bound here because an observer signalling must be
+reported rather than propagated whatever the user has set."
   (with-temp-buffer
     (insert scholia-send-test--source)
-    (let* ((annotations (scholia-send-test--annotations))
+    (let* ((debug-on-error t)
+           (annotations (scholia-send-test--annotations))
            (send (scholia-send-test--send "claude-2"))
            (seen nil)
            (logger (lambda (&rest _) (push 'logger seen)))

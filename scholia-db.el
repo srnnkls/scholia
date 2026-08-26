@@ -269,8 +269,9 @@ returned either way."
   (let ((sent (mapcar (lambda (annotation)
                         (scholia-db-annotation-add-send annotation send))
                       annotations)))
-    (with-demoted-errors "scholia: send observer failed: %S"
-      (run-hook-with-args 'scholia-send-functions sent send))
+    (condition-case failure
+        (run-hook-with-args 'scholia-send-functions sent send)
+      (error (message "scholia: send observer failed: %S" failure)))
     sent))
 
 
