@@ -35,6 +35,9 @@ jobs:
       - name: Install dependencies
         run: eask install-deps --dev
 
+      - name: Report SQLite availability
+        run: eask exec emacs -Q --batch --eval "(princ (format \"sqlite-available-p=%S\" (and (fboundp 'sqlite-available-p) (sqlite-available-p))))"
+
       - name: Compile
         run: eask compile
 
