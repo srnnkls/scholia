@@ -40,6 +40,13 @@
   "Return when the session DB belongs to was first written."
   (plist-get (plist-get db :session) :created))
 
+(defun scholia-db-set-session-name (db name)
+  "Return a copy of DB whose session is called NAME.
+DB is left as it stands, so a rename that fails before it writes leaves
+the database it read whole."
+  (scholia-db--with-fields
+   db :session (scholia-db--with-fields (plist-get db :session) :name name)))
+
 (defun scholia-db--publish-session (db session-file)
   "Return DB with a session header naming it after SESSION-FILE.
 A header DB already carries is left alone, so `:created' keeps the
@@ -483,6 +490,28 @@ orphan arriving through an import or a merge is caught."
                                 (scholia-db-record-checksum
                                  (scholia-db-record db file))
                               checksum))))))
+
+(defun scholia-db-write (session-file db)
+  "Store DB in SESSION-FILE as it stands and return what was written.
+The annotations are written exactly as DB carries them, so unlike
+`scholia-db-save' this takes no source context from the current buffer:
+a database read in one buffer and written from another keeps the
+`:line', `:line-text', `:column' and `:end-column' it was stored with
+\(INV-13).  A DB carrying no session header is given one named after
+SESSION-FILE, and one already carrying a header keeps it."
+  (let ((published (scholia-db--publish-session db session-file)))
+    (scholia-db--write session-file published)
+    published))
+
+(defun scholia-db-create-session (session-file)
+  "Return the database in SESSION-FILE, writing a header when it has none.
+A SESSION-FILE already holding a session is read and returned untouched,
+so its `:created' keeps the moment the session was first made and its
+records are left where they are."
+  (let ((db (scholia-db-load session-file)))
+    (if (scholia-db-session-name db)
+        db
+      (scholia-db-write session-file db))))
 
 
 ;;;; The checksum-drift re-search

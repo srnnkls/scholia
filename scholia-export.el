@@ -1,0 +1,392 @@
+;;; scholia-export.el --- Export formats  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Sören Nikolaus
+
+;; Author: Sören Nikolaus <soeren@code17.io>
+;; Maintainer: Sören Nikolaus <soeren@code17.io>
+;; URL: https://github.com/srnnkls/scholia
+;; Keywords: convenience, tools
+
+;; This file is not part of GNU Emacs.
+
+;;; Commentary:
+
+;; Renders annotations as rustc diagnostics, as a unified diff, or as a
+;; commented copy of the source.  Position, source line and columns come
+;; from the context each annotation carries rather than from the buffer a
+;; formatter happens to be called in, so an annotation reads the same
+;; wherever it is rendered and long after its file changed.
+
+;;; Code:
+
+(require 'seq)
+(require 'scholia-vars)
+(require 'scholia-db)
+(require 'scholia-thread)
+(require 'scholia-core)
+
+(define-error 'scholia-export-unknown-format
+              "No such export format"
+              'scholia-error)
+
+(defconst scholia-export--underline ?~
+  "Character underlining annotated text in an integrated export.")
+
+(defconst scholia-export--reply-indent 2
+  "Columns a reply is set in past the note it answers.")
+
+(defconst scholia-export--fallback-comment "#"
+  "Comment syntax used where the source buffer names none.")
+
+(defconst scholia-export-buffer-name "*scholia-export*"
+  "Buffer a `buffer' export is shown in.")
+
+
+;;;; What a formatter renders against
+
+(defun scholia-export--source-buffer (file-or-buffer)
+  "Return the buffer holding the source text FILE-OR-BUFFER names.
+Only a buffer names one; reading a file into one is the session
+export's, so anything else answers with the current buffer."
+  (if (bufferp file-or-buffer) file-or-buffer (current-buffer)))
+
+(defun scholia-export--name (file-or-buffer)
+  "Return the name a rendering gives FILE-OR-BUFFER.
+A buffer visiting no file answers with its own name, so an annotation
+made in a scratch buffer still renders somewhere."
+  (if (stringp file-or-buffer)
+      file-or-buffer
+    (with-current-buffer (scholia-export--source-buffer file-or-buffer)
+      (or (buffer-file-name) (buffer-name)))))
+
+
+;;;; Threads
+
+(defun scholia-export--root (thread)
+  "Return the annotation THREAD hangs off."
+  (car (car thread)))
+
+(defun scholia-export--placed-p (thread)
+  "Return non-nil when THREAD heads a source line to render against."
+  (and (scholia-db-annotation-line (scholia-export--root thread)) t))
+
+(defun scholia-export--threads (annotations)
+  "Return ANNOTATIONS grouped into the threads they form, placed ones first.
+Each thread is a list of annotation and depth pairs in the order
+`scholia-thread-walk' visits them, its root first and at depth 0.  The
+car holds the threads a formatter renders against a line and the cdr
+those it cannot: a reply the walk re-rooted carries no source context,
+and a reply is never a diagnostic of its own (INV-14).  Every formatter
+reads the split from here, so the two halves cannot drift apart."
+  (let ((threads nil))
+    (scholia-thread-walk
+     annotations
+     (lambda (annotation depth)
+       (if (zerop depth)
+           (push (list (cons annotation depth)) threads)
+         (push (cons annotation depth) (car threads)))))
+    (let ((walked (mapcar #'nreverse (nreverse threads))))
+      (cons (seq-filter #'scholia-export--placed-p walked)
+            (seq-remove #'scholia-export--placed-p walked)))))
+
+(defun scholia-export--lines (text)
+  "Return the physical lines TEXT carries, the empty ones among them.
+A note is free text and may hold newlines, which every formatter must
+break before it prefixes anything: a line commented once leaves the rest
+of the note reading as source."
+  (split-string (or text "") "\n"))
+
+(defun scholia-export--reply (annotation depth)
+  "Return the lines for ANNOTATION at DEPTH, its id ahead of its note.
+The id is the handle an agent answering the annotation quotes back.  A
+note carrying several lines sets each of them at DEPTH, so its own lines
+stay flush with one another."
+  (let ((indent (make-string (* depth scholia-export--reply-indent) ?\s))
+        (lines (scholia-export--lines
+                (scholia-db-annotation-text annotation))))
+    (cons (concat indent
+                  (format "[%s] %s"
+                          (scholia-db-annotation-id annotation)
+                          (car lines)))
+          (mapcar (lambda (line) (concat indent line)) (cdr lines)))))
+
+(defun scholia-export--replies (thread)
+  "Return the lines the replies of THREAD read as."
+  (mapcan (lambda (entry) (scholia-export--reply (car entry) (cdr entry)))
+          (cdr thread)))
+
+(defun scholia-export--orphan (annotation)
+  "Return the lines for the orphaned reply ANNOTATION.
+The line names the annotation it answers, which nothing else in the
+rendering carries: that annotation is not in this export."
+  (let ((lines (scholia-export--lines
+                (scholia-db-annotation-text annotation))))
+    (cons (format "[%s] in reply to %s: %s"
+                  (scholia-db-annotation-id annotation)
+                  (or (scholia-db-annotation-orphaned-from annotation)
+                      (scholia-db-annotation-reply-to annotation))
+                  (car lines))
+          (cdr lines))))
+
+(defun scholia-export--orphan-block (threads)
+  "Return the lines the orphaned THREADS trail the rendering with.
+Nil when there are none, so a rendering without orphans reads exactly as
+it did.  The block carries no caret, no header and no hunk: a reply
+holds no position to point at, and INV-14 leaves it no diagnostic of its
+own.  The replies an orphan gathered nest under it as they do anywhere
+else."
+  (when threads
+    (cons "note: replies whose annotation is not in this export"
+          (mapcan (lambda (thread)
+                    (append (scholia-export--orphan
+                             (scholia-export--root thread))
+                            (scholia-export--replies thread)))
+                  threads))))
+
+(defun scholia-export--width (annotation)
+  "Return how many columns the marked run of ANNOTATION covers."
+  (max 1 (- (scholia-db-annotation-end-column annotation)
+            (scholia-db-annotation-column annotation))))
+
+
+;;;; The rustc format
+
+(defun scholia-export--diagnostic (thread name)
+  "Return the diagnostic for THREAD against the file NAME.
+The caret run sits at the column the annotation was taken at, counted
+over the raw source line, so it stays put whatever mode renders the
+source (INV-6).  A chain spanning several lines is pointed at where it
+begins rather than where it ends."
+  (let* ((annotation (scholia-export--root thread))
+         (line (scholia-db-annotation-line annotation))
+         (column (scholia-db-annotation-column annotation))
+         (width (scholia-export--width annotation))
+         (gutter (make-string (length (number-to-string line)) ?\s))
+         (prefix (concat gutter " | "))
+         (note-column (+ column width 1))
+         (note (scholia-export--lines
+                (scholia-db-annotation-text annotation))))
+    (string-join
+     (append
+      (list (format "%s--> %s:%d:%d [%s]" gutter name line (1+ column)
+                    (scholia-db-annotation-id annotation))
+            (concat gutter " |")
+            (format "%d | %s" line
+                    (scholia-db-annotation-line-text annotation))
+            (concat prefix
+                    (make-string column ?\s)
+                    (make-string width ?^)
+                    " "
+                    (car note)))
+      (mapcar (lambda (payload)
+                (concat prefix (make-string note-column ?\s) payload))
+              (append (cdr note) (scholia-export--replies thread)))
+      (list (concat gutter " |")))
+     "\n")))
+
+(defun scholia-export-rustc (annotations &optional file-or-buffer)
+  "Return ANNOTATIONS as rustc diagnostics against FILE-OR-BUFFER.
+One diagnostic per thread, its replies nested under the note they
+answer, and a trailing note carrying the replies no diagnostic could
+hold."
+  (let* ((name (scholia-export--name file-or-buffer))
+         (threads (scholia-export--threads annotations))
+         (orphans (scholia-export--orphan-block (cdr threads))))
+    (string-join
+     (append (mapcar (lambda (thread)
+                       (scholia-export--diagnostic thread name))
+                     (car threads))
+             (and orphans (list (string-join orphans "\n"))))
+     "\n\n")))
+
+
+;;;; Commented source
+
+(defun scholia-export--comment (payload column start end)
+  "Return PAYLOAD commented by START and END and beginning at COLUMN.
+The padding is measured against the width of START, so the payload
+begins at COLUMN whatever the comment syntax costs (INV-9).  No comment
+syntax reaches left of its own prefix: for a COLUMN under the width of
+START the padding clamps to zero and the payload begins at that width
+instead, which is as near the column as a comment gets."
+  (concat (make-string (max 0 (- column (string-width start))) ?\s)
+          start payload end))
+
+(defun scholia-export--comment-block (thread start end)
+  "Return the lines for THREAD, commented by START and END.
+The underline comes first, then the id of the annotation, then its note
+and the replies it carries."
+  (let* ((annotation (scholia-export--root thread))
+         (column (scholia-db-annotation-column annotation)))
+    (mapcar (lambda (payload)
+              (scholia-export--comment payload column start end))
+            (append (list (make-string (scholia-export--width annotation)
+                                       scholia-export--underline)
+                          (format "[%s]"
+                                  (scholia-db-annotation-id annotation)))
+                    (scholia-export--lines
+                     (scholia-db-annotation-text annotation))
+                    (scholia-export--replies thread)))))
+
+(defun scholia-export--threads-on (threads line)
+  "Return the entries of THREADS taken against LINE."
+  (seq-filter (lambda (thread)
+                (equal (scholia-db-annotation-line
+                        (scholia-export--root thread))
+                       line))
+              threads))
+
+(defun scholia-export-integrate (annotations &optional file-or-buffer)
+  "Return the source of FILE-OR-BUFFER carrying ANNOTATIONS as comments.
+Each annotation is written below the line it was taken against, leaving
+the source itself as it stands, and the replies no line holds trail the
+source as comments of their own.  The whole file is read whatever it is
+narrowed to: an annotation carries absolute positions, so a restriction
+would renumber the source out from under it."
+  (with-current-buffer (scholia-export--source-buffer file-or-buffer)
+    (let* ((start (or comment-start scholia-export--fallback-comment))
+           (end (or comment-end ""))
+           (threads (scholia-export--threads annotations))
+           (source (save-restriction
+                     (widen)
+                     (buffer-substring-no-properties (point-min) (point-max))))
+           (number 0)
+           (output nil))
+      (dolist (line (split-string source "\n"))
+        (setq number (1+ number))
+        (push line output)
+        (dolist (thread (scholia-export--threads-on (car threads) number))
+          (dolist (comment (scholia-export--comment-block thread start end))
+            (push comment output))))
+      (dolist (line (scholia-export--orphan-block (cdr threads)))
+        (push (scholia-export--comment line 0 start end) output))
+      (string-join (nreverse output) "\n"))))
+
+
+;;;; The diff format
+
+(defun scholia-export--source-lines (threads)
+  "Return the source lines THREADS are taken against, once each, ascending.
+A hunk answers for a line, not for a thread, and the hunks of a patch
+count forward, so the order the annotations arrive in is not the order
+the hunks go out in."
+  (sort (seq-uniq (mapcar (lambda (thread)
+                            (scholia-db-annotation-line
+                             (scholia-export--root thread)))
+                          threads))
+        #'<))
+
+(defun scholia-export--hunks (threads start end)
+  "Return the hunks adding THREADS, commented by START and END.
+One hunk per source line: two annotations on one line are normal, and
+two hunks naming that line make a patch `git apply' rejects as corrupt.
+Each hunk's new starting line counts the lines the hunks ahead of it
+added, which is what the new file is numbered in.  The annotated line is
+the only context a hunk carries, so a rendering made long after the file
+changed still applies as a patch of its own."
+  (let ((offset 0)
+        (hunks nil))
+    (dolist (line (scholia-export--source-lines threads))
+      (let* ((on (scholia-export--threads-on threads line))
+             (added (mapcan (lambda (thread)
+                              (scholia-export--comment-block thread start end))
+                            on)))
+        (push (append
+               (list (format "@@ -%d,1 +%d,%d @@"
+                             line (+ line offset) (1+ (length added)))
+                     (concat " " (scholia-db-annotation-line-text
+                                  (scholia-export--root (car on)))))
+               (mapcar (lambda (comment) (concat "+" comment)) added))
+              hunks)
+        (setq offset (+ offset (length added)))))
+    (apply #'append (nreverse hunks))))
+
+(defun scholia-export-diff (annotations &optional file-or-buffer)
+  "Return ANNOTATIONS as a unified diff adding them to FILE-OR-BUFFER.
+The headers carry no timestamp, so the same annotations render the same
+diff however often they are exported.  The replies no line holds trail
+the last hunk as comments, past where the patch ends: a note is free
+text, and a raw line of one reading as `---' or `@@' would be parsed as
+patch of its own."
+  (let ((name (scholia-export--name file-or-buffer))
+        (threads (scholia-export--threads annotations))
+        (start nil)
+        (end nil))
+    (with-current-buffer (scholia-export--source-buffer file-or-buffer)
+      (setq start (or comment-start scholia-export--fallback-comment))
+      (setq end (or comment-end "")))
+    (string-join
+     (append (list (concat "--- " name) (concat "+++ " name))
+             (scholia-export--hunks (car threads) start end)
+             (mapcar (lambda (line)
+                       (scholia-export--comment line 0 start end))
+                     (scholia-export--orphan-block (cdr threads))))
+     "\n")))
+
+
+;;;; Dispatch
+
+(defcustom scholia-export-functions
+  '((rustc . scholia-export-rustc)
+    (diff . scholia-export-diff)
+    (integrate . scholia-export-integrate))
+  "Alist mapping a format symbol to the function rendering it.
+Each function takes the annotations to render and, optionally, the file
+or buffer they were taken against, and returns a string."
+  :type '(alist :key-type symbol :value-type function)
+  :group 'scholia)
+
+(defun scholia-export-render (annotations &optional format file-or-buffer)
+  "Return ANNOTATIONS rendered as FORMAT against FILE-OR-BUFFER.
+FORMAT defaults to `scholia-export-format'.  ANNOTATIONS are rendered as
+they come: narrowing them to one file or one session is the caller's.
+An unregistered FORMAT signals `scholia-export-unknown-format'."
+  (let* ((format (or format scholia-export-format))
+         (formatter (alist-get format scholia-export-functions)))
+    (unless formatter
+      (signal 'scholia-export-unknown-format (list format)))
+    (funcall formatter annotations file-or-buffer)))
+
+
+;;;; The command
+
+(defun scholia-export--payload ()
+  "Return the annotations of this buffer with the replies they carry.
+The chains on screen answer with the source context they hold right
+now, and the replies stored for this file join them: a reply is kept by
+the record alone, so an export built from the buffer would drop every
+one of them."
+  (let ((annotations (mapcar #'scholia-db--snapshot
+                             (scholia-core--buffer-annotations)))
+        (file (scholia-buffer-file)))
+    (append annotations
+            (and file
+                 (seq-filter #'scholia-db-annotation-reply-p
+                             (scholia-db-record-annotations
+                              (scholia-db-record
+                               (scholia-db-load (scholia-session-file))
+                               file)))))))
+
+(defun scholia-export--show (output)
+  "Show OUTPUT in `scholia-export-buffer-name'."
+  (let ((buffer (get-buffer-create scholia-export-buffer-name)))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert output))
+    (display-buffer buffer)))
+
+(defun scholia-export (&optional target format)
+  "Render the annotations of this buffer and put them where TARGET points.
+TARGET is nil to only return the rendering, `kill-ring' to copy it,
+`buffer' to show it in `scholia-export-buffer-name', or the name of a
+file to write it to.  FORMAT defaults to `scholia-export-format'.  The
+rendering is returned whatever TARGET is."
+  (interactive (list 'buffer))
+  (let ((output (scholia-export-render (scholia-export--payload) format)))
+    (cond ((eq target 'kill-ring) (kill-new output))
+          ((eq target 'buffer) (scholia-export--show output))
+          ((stringp target) (write-region output nil target nil 'silent)))
+    output))
+
+(provide 'scholia-export)
+;;; scholia-export.el ends here

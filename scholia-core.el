@@ -34,22 +34,62 @@ clone reach the same record."
   "Return the file this buffer annotates, or nil when it visits none."
   (buffer-file-name (scholia-core--base-buffer)))
 
+(defun scholia-session-default-name ()
+  "Return the session a buffer annotates into when nothing else binds one."
+  (or (default-value 'scholia-session) "default"))
+
+(defun scholia-core--project-session ()
+  "Return the session assigned to the project this buffer belongs to.
+The assignments configured in `scholia-project-sessions' are searched
+before the ones `scholia-session-assign-project' stored, so a project
+answers to its configuration whatever a past assignment left behind.
+Both sides of the lookup are expanded and slash-terminated, so a root
+configured as \"~/src/foo\" answers for a project rooted at
+\"/home/me/src/foo/\"."
+  (let ((root (scholia--directory-name
+               (funcall scholia-project-root-function))))
+    (when root
+      (cdr (seq-find (lambda (entry)
+                       (equal (scholia--directory-name (car entry)) root))
+                     (append scholia-project-sessions
+                             (scholia-stored-assignments)))))))
+
 (defun scholia-session-name ()
   "Return the name of the session this buffer annotates into.
-The buffer's own `scholia-session' answers first and its base buffer's
-next, then the entry `scholia-project-sessions' holds for the project
-root, and \"default\" when nothing else does."
-  (or scholia-session
-      (buffer-local-value 'scholia-session (scholia-core--base-buffer))
-      (cdr (assoc (funcall scholia-project-root-function)
-                  scholia-project-sessions))
-      "default"))
+A binding the buffer itself made answers first and one its base buffer
+made next, then the entry `scholia-project-sessions' holds for the
+project root, and `scholia-session-default-name' when nothing else does.
+Only a binding actually made answers: `scholia-session' is a defcustom,
+so reading it where no buffer made one hands back the global default and
+the project rung would never be reached."
+  (let ((base (scholia-core--base-buffer)))
+    (or (and (local-variable-p 'scholia-session) scholia-session)
+        (and (local-variable-p 'scholia-session base)
+             (buffer-local-value 'scholia-session base))
+        (scholia-core--project-session)
+        (scholia-session-default-name))))
 
-(defun scholia-session-file ()
-  "Return the file holding the session this buffer annotates into.
-Answers before command `scholia-mode' is enabled as well as after."
-  (expand-file-name (concat (scholia-session-name) ".eld")
-                    scholia-session-directory))
+(defun scholia-session-name-p (name)
+  "Return non-nil when NAME names a file of `scholia-session-directory'.
+A name carrying a directory part resolves outside that directory, where
+scholia would read and overwrite a file that is none of its business."
+  (and (stringp name)
+       (not (string-empty-p name))
+       (equal name (file-name-nondirectory name))
+       (not (member name '("." "..")))))
+
+(defun scholia-session-file (&optional name)
+  "Return the file holding the session called NAME.
+NAME defaults to the session this buffer annotates into, which answers
+before command `scholia-mode' is enabled as well as after.  A name that
+would resolve outside `scholia-session-directory' is refused here rather
+than in the commands, since `scholia-session' and
+`scholia-project-sessions' are set in configuration and reach the load
+and save paths without passing one."
+  (let ((name (or name (scholia-session-name))))
+    (unless (scholia-session-name-p name)
+      (signal 'scholia-error (list (format "Not a session name: %S" name))))
+    (expand-file-name (concat name ".eld") scholia-session-directory)))
 
 (defun scholia-buffer-checksum ()
   "Return the fingerprint of this buffer as it stands.
@@ -222,6 +262,32 @@ folds them back on its own and they never enter the preserve list."
                             (equal (scholia-db-annotation-id candidate) id))
                           scholia--unplaced-annotations))))))
 
+(defun scholia-core--fall-back-to-default ()
+  "Bind this buffer to the default session when the one it names is unusable.
+A session is unusable when nobody made it or when its name would leave
+`scholia-session-directory', and a project assignment is the only rung
+that can name either.  Both are answered for here rather than in
+`scholia-session-name' because that resolves afresh on every save and
+every load and would stat the file and repeat the report each time.
+Falling back rather than signalling is what keeps a typo in
+`scholia-project-sessions' from making a file unannotatable; a caller
+naming the session itself still gets the signal from
+`scholia-session-file'."
+  (let ((name (scholia-session-name))
+        (fallback (scholia-session-default-name)))
+    (unless (or (local-variable-p 'scholia-session)
+                (equal name fallback))
+      (cond
+       ((not (scholia-session-name-p name))
+        (scholia-core--report
+         "Session %s is not a session name: annotating into %s instead"
+         name fallback)
+        (setq-local scholia-session fallback))
+       ((not (file-exists-p (scholia-session-file name)))
+        (scholia-core--report "Session %s is gone: annotating into %s instead"
+                              name fallback)
+        (setq-local scholia-session fallback))))))
+
 (defun scholia-initialize ()
   "Render the annotations stored for this buffer and arm the save on kill.
 The save is armed before anything is read, so a read that signals still
@@ -230,6 +296,7 @@ chains is left alone, so enabling the mode twice does not draw a second
 copy of every annotation over the first.  Every stored annotation counts
 as unplaced until a chain of it stands in the buffer, so whatever the
 render did not reach is reported by name and kept in the record."
+  (scholia-core--fall-back-to-default)
   (add-hook 'kill-buffer-hook #'scholia-core--save-on-kill nil t)
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
   (let ((file (scholia-buffer-file)))

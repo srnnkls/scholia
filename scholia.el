@@ -24,6 +24,16 @@
 (require 'scholia-vars)
 
 ;;;###autoload (autoload 'scholia-mode "scholia-vars" nil t)
+;;;###autoload (autoload 'scholia-session-create "scholia-session" nil t)
+;;;###autoload (autoload 'scholia-session-switch "scholia-session" nil t)
+;;;###autoload (autoload 'scholia-session-rename "scholia-session" nil t)
+;;;###autoload (autoload 'scholia-session-delete "scholia-session" nil t)
+;;;###autoload (autoload 'scholia-session-import "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-assign-project "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-load-assignments "scholia-session" nil t)
+;;;###autoload (autoload 'scholia-export "scholia-export" nil t)
 
 (provide 'scholia)
 ;;; scholia.el ends here

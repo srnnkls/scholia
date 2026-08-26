@@ -52,22 +52,62 @@ global default when no project matches."
   :type '(alist :key-type (directory :tag "Project root")
                 :value-type (string :tag "Session name")))
 
+(defun scholia--directory-name (directory)
+  "Return DIRECTORY expanded and slash-terminated, or nil for a nil DIRECTORY.
+Project roots and the keys they are looked up against are compared as
+strings, so an assignment only ever matches when both sides are spelled
+here."
+  (and directory (file-name-as-directory (expand-file-name directory))))
+
 (defun scholia-project-root ()
   "Return the root of the current project, or nil when there is none.
 Asks projectile when it is loaded and project.el otherwise.  The root is
 returned absolute and slash-terminated, so roots from either backend key
 the same entry of `scholia-project-sessions'."
-  (let ((root (or (and (fboundp 'projectile-project-root)
-                       (projectile-project-root))
-                  (let ((project (and (fboundp 'project-current)
-                                      (project-current))))
-                    (and project (project-root project))))))
-    (and root (file-name-as-directory (expand-file-name root)))))
+  (scholia--directory-name
+   (or (and (fboundp 'projectile-project-root)
+            (projectile-project-root))
+       (let ((project (and (fboundp 'project-current)
+                           (project-current))))
+         (and project (project-root project))))))
 
 (defcustom scholia-project-root-function #'scholia-project-root
   "Function returning the root of the current project, or nil.
 Its value decides which entry of `scholia-project-sessions' applies."
   :type 'function)
+
+(defcustom scholia-session-state-file
+  (locate-user-emacs-file "scholia/project-sessions.eld")
+  "File the assignments made with `scholia-session-assign-project' persist in.
+Point this at your setup's durable state directory when
+`locate-user-emacs-file' lands in a cache that is wiped.  Assignments
+written in configuration through `scholia-project-sessions' need no
+file, and answer before the stored ones."
+  :type 'file)
+
+(defvar scholia--assignment-cache nil
+  "Cons of the state file last read and the assignments it held.")
+
+(defun scholia--read-state-file ()
+  "Return the assignments in `scholia-session-state-file', or nil for none."
+  (when (and scholia-session-state-file
+             (file-readable-p scholia-session-state-file))
+    (with-temp-buffer
+      (insert-file-contents scholia-session-state-file)
+      (condition-case nil
+          (let ((stored (read (current-buffer))))
+            (and (listp stored) stored))
+        (error nil)))))
+
+(defun scholia-stored-assignments ()
+  "Return the assignments saved in `scholia-session-state-file'.
+The file is read again whenever `scholia-session-state-file' names
+another one, and the writer hands its result over as it stores it, so
+resolving a session name costs no read."
+  (unless (equal (car scholia--assignment-cache) scholia-session-state-file)
+    (setq scholia--assignment-cache
+          (cons scholia-session-state-file (scholia--read-state-file))))
+  (cdr scholia--assignment-cache))
 
 (defcustom scholia-autosave t
   "Whether scholia stores the annotations before it lets go of a buffer.
