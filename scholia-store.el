@@ -245,13 +245,26 @@ transaction of it committed, and goes with its temporary when none did."
   "Evaluate BODY as one transaction on STORE and return its value.
 A non-local exit out of BODY rolls the transaction back and carries on
 out, so a write cut short leaves the store exactly as BODY found it and
-a store still being made is discarded rather than landed."
+a store still being made is discarded rather than landed.
+
+The commit and the rollback are issued here rather than through
+`with-sqlite-transaction' because that macro commits from its own
+cleanup form on Emacs 29.1, whichever way its body exited, and 29.1 is
+the floor this package declares.  Substituting it back reads as a
+simplification and passes on Emacs 30, where the macro rolls back."
   (declare (indent 1) (debug (form body)))
-  (let ((opened (make-symbol "store")))
-    `(let ((,opened ,store))
-       (prog1 (with-sqlite-transaction (scholia-store--connection ,opened)
-                ,@body)
-         (setf (scholia-store--committed ,opened) t)))))
+  (let ((opened (make-symbol "store"))
+        (done (make-symbol "done")))
+    `(let ((,opened ,store)
+           (,done nil))
+       (sqlite-transaction (scholia-store--connection ,opened))
+       (unwind-protect
+           (prog1 (progn ,@body)
+             (sqlite-commit (scholia-store--connection ,opened))
+             (setf (scholia-store--committed ,opened) t)
+             (setq ,done t))
+         (unless ,done
+           (sqlite-rollback (scholia-store--connection ,opened)))))))
 
 
 ;;;; Rows
