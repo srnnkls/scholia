@@ -18,7 +18,8 @@
 
 (let ((load-prefer-newer t))
   (require 'scholia-vars nil t)
-  (require 'scholia-db nil t))
+  (require 'scholia-db nil t)
+  (require 'scholia-store nil t))
 
 (defconst scholia-db-test--source
   "alpha one\nbeta two\ngamma three\ndelta four\n"
@@ -142,16 +143,16 @@ COUNT defaults to the first occurrence."
             (should (equal (length loaded) 2))
             (should (equal (scholia-db-test--ids loaded) '("id-delta" "id-gamma")))
             (should (equal (scholia-db-record-checksum record) "checksum-two")))
-          (let ((whole-buffer (symbol-function 'write-region)))
-            (cl-letf (((symbol-function 'write-region)
-                       (lambda (start end filename &rest arguments)
-                         (let ((from (or start (point-min)))
-                               (to (or end (point-max))))
-                           (apply whole-buffer from (/ (+ from to) 2)
-                                  filename arguments))
+          (let ((put (symbol-function 'scholia-store-put-record))
+                (called nil))
+            (cl-letf (((symbol-function 'scholia-store-put-record)
+                       (lambda (&rest arguments)
+                         (setq called t)
+                         (apply put arguments)
                          (error "Write interrupted"))))
               (should-error (scholia-db-save session file (list gamma)
-                                             "checksum-three"))))
+                                             "checksum-three"))
+              (should called)))
           (let ((record (scholia-db-record (scholia-db-load session) file)))
             (should (equal (scholia-db-test--ids
                             (scholia-db-record-annotations record))

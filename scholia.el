@@ -29,6 +29,7 @@
 ;;;###autoload (autoload 'scholia-session-rename "scholia-session" nil t)
 ;;;###autoload (autoload 'scholia-session-delete "scholia-session" nil t)
 ;;;###autoload (autoload 'scholia-session-import "scholia-session" nil t)
+;;;###autoload (autoload 'scholia-session-export "scholia-session" nil t)
 ;;;###autoload
 (autoload 'scholia-session-assign-project "scholia-session" nil t)
 ;;;###autoload

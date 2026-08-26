@@ -30,6 +30,16 @@
   "Write CONTENT into a fresh temporary file and return its name."
   (make-temp-file "scholia-test-" nil ".txt" content))
 
+(defconst scholia-test-sqlite-magic "SQLite format 3\0"
+  "The sixteen bytes every SQLite database file opens with.")
+
+(defun scholia-test-file-magic (file)
+  "Return the first sixteen bytes of FILE as a unibyte string."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file nil 0 16)
+    (buffer-string)))
+
 (defmacro scholia-test-with-temp-file-buffer (var content &rest body)
   "Evaluate BODY with VAR bound to a buffer visiting a temporary file.
 CONTENT is written to the file before it is visited, and BODY runs with

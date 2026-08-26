@@ -19,6 +19,7 @@
 
 (require 'seq)
 (require 'scholia-vars)
+(require 'scholia-store)
 (require 'scholia-db)
 (require 'scholia-core)
 
@@ -42,6 +43,18 @@
     (scholia-session--refuse "Not a session name: %S" name))
   name)
 
+(defun scholia-session--read (file)
+  "Return the database FILE carries, writing nothing to FILE.
+Listing the sessions and importing one both reach files that are the
+caller's rather than the store's, and `scholia-db-load' migrates the
+path it is handed: an exported `.eld' parked in the session directory
+would be converted the moment a session prompt was opened, and a
+colleague's export could not be imported at all from a directory
+scholia cannot write to."
+  (if (scholia-store-interchange-p file)
+      (scholia-store-read-interchange file)
+    (scholia-db-load file)))
+
 (defun scholia-session--session-file-p (name)
   "Return non-nil when NAME answers to a database carrying a session header.
 Reading the header is what tells a session apart from the other files
@@ -51,7 +64,7 @@ unreadable, a directory, or no session name at all costs the caller the
 one entry rather than the whole listing."
   (condition-case nil
       (and (scholia-db-session-name
-            (scholia-db-load (scholia-session-file name)))
+            (scholia-session--read (scholia-session-file name)))
            t)
     (error nil)))
 
@@ -239,7 +252,11 @@ Every buffer annotating into OLD stores what it holds before the file
 moves, and the global default, the buffer-local bindings and the project
 assignments naming OLD are pointed at NEW afterwards, so nothing is left
 resolving to a session that is gone.  A NEW already taken is refused
-before anything is saved or moved."
+before anything is saved or moved.
+
+The database itself is moved by `scholia-store-rename', which takes the
+journals beside it along; unlinking the session file alone would leave
+them orphaned at a name nothing answers to."
   (interactive (list (scholia-session--read-name "Rename session: ")
                      (read-string "New name: ")))
   (scholia-session--check-name old)
@@ -253,10 +270,10 @@ before anything is saved or moved."
     (dolist (buffer (scholia-session--buffers-of (list old)))
       (with-current-buffer buffer
         (scholia-save-annotations)))
+    (scholia-store-rename source target)
     (scholia-db-write target
-                      (scholia-db-set-session-name (scholia-db-load source)
+                      (scholia-db-set-session-name (scholia-db-load target)
                                                    new))
-    (delete-file source)
     (scholia-session--rebind old new)
     new))
 
@@ -266,7 +283,11 @@ A session a buffer still annotates into is refused unless FORCE, since
 what stands on screen there may be the only copy of it.  Forcing stores
 nothing and takes no buffer down: the file goes, and the global default,
 the buffer-local bindings and the project assignments naming NAME are
-dropped, so what those buffers hold is theirs to save somewhere else."
+dropped, so what those buffers hold is theirs to save somewhere else.
+
+The database goes through `scholia-store-delete', which takes the
+journals beside it along; unlinking the session file alone would leave
+them for the next session of the same name to open."
   (interactive (list (scholia-session--read-name "Delete session: ")
                      current-prefix-arg))
   (scholia-session--check-name name)
@@ -275,9 +296,32 @@ dropped, so what those buffers hold is theirs to save somewhere else."
       (scholia-session--refuse "There is no session called %s" name))
     (when (and (not force) (scholia-session--buffers-of (list name)))
       (scholia-session--refuse "Buffers still annotate into %s" name))
-    (delete-file file)
+    (scholia-store-delete file)
     (scholia-session--rebind name nil)
     name))
+
+(defun scholia-session-export (name file)
+  "Write the session called NAME out to FILE.
+FILE carries the printed plist under the `:scholia' version tag rather
+than the bytes the session is stored as, so a session stays something to
+diff, commit and hand to a colleague, and `scholia-session-import' reads
+back what this writes.  The arguments read the way
+`scholia-session-rename' does, from the session towards where it goes;
+`scholia-session-import' takes the outside file first because it names
+where that file lands.  A FILE already there is replaced only once the
+user has said so, the way every other command writing to a path the
+user named asks."
+  (interactive (list (scholia-session--read-name "Export session: ")
+                     (read-file-name "Write to: ")))
+  (scholia-session--check-name name)
+  (let ((source (scholia-session-file name)))
+    (unless (file-exists-p source)
+      (scholia-session--refuse "There is no session called %s" name))
+    (when (and (file-exists-p file)
+               (not (yes-or-no-p (format "Replace %s? " file))))
+      (scholia-session--refuse "Not replacing %s" file))
+    (scholia-store-write-interchange file (scholia-db-load source))
+    file))
 
 (defun scholia-session-import (file name)
   "Take the session stored in FILE into the session called NAME.
@@ -297,7 +341,7 @@ written back out of existence by its next save."
   (interactive (list (read-file-name "Session file: " nil nil t)
                      (read-string "Import as: ")))
   (scholia-session--check-name name)
-  (let* ((incoming (scholia-db-load file))
+  (let* ((incoming (scholia-session--read file))
          (target (scholia-session-file name))
          (affected (scholia-session--buffers-of (list name))))
     (dolist (buffer affected)

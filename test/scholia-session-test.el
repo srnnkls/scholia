@@ -23,6 +23,7 @@
   (require 'scholia-vars nil t)
   (require 'scholia-overlay nil t)
   (require 'scholia-db nil t)
+  (require 'scholia-store nil t)
   (require 'scholia-core nil t)
   (require 'scholia-session nil t))
 
@@ -139,6 +140,10 @@ against the current buffer is visible in the values that come back."
   "Return the annotations the session called NAME carries for FILE."
   (scholia-db-record-annotations
    (scholia-db-record (scholia-db-load (scholia-session-file name)) file)))
+
+(defun scholia-session-test--journals ()
+  "Return the WAL and shared-memory files left in the session directory."
+  (directory-files scholia-session-directory nil "-\\(wal\\|shm\\)\\'"))
 
 (defun scholia-session-test--texts (annotations)
   "Return the notes ANNOTATIONS carry, sorted."
@@ -582,6 +587,133 @@ and its next save mints the old name afresh."
                              "answers nothing"))
               (should-not (scholia-db-annotation-orphaned-from kept))))
         (delete-file outside)))))
+
+(ert-deftest scholia-session-export-writes-an-eld-that-import-reads-back ()
+  "A session exports as an interchange `.eld' and imports back unchanged.
+The export is what keeps a session something a user can diff, commit and
+hand to a colleague once the store itself is a binary database, so it
+carries the printed `:scholia' tag rather than the stored bytes."
+  (scholia-session-test--with-state
+    (let ((exported (make-temp-file "scholia-exported-" nil ".eld")))
+      (unwind-protect
+          (progn
+            (scholia-session-test--seed
+             "source" "/nowhere/shared.txt"
+             (list (scholia-session-test--annotation "one" "a root" 1 6)
+                   (scholia-session-test--annotation "two" "a second" 7 11)))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+              (scholia-session-export "source" exported))
+            (should-not (equal (scholia-test-file-magic exported)
+                               scholia-test-sqlite-magic))
+            (should (eq (car (with-temp-buffer
+                               (insert-file-contents exported)
+                               (read (current-buffer))))
+                        :scholia))
+            (scholia-session-import exported "copy")
+            (should (equal (scholia-session-test--stored
+                            "copy" "/nowhere/shared.txt")
+                           (scholia-session-test--stored
+                            "source" "/nowhere/shared.txt")))
+            (should (equal (scholia-db-files
+                            (scholia-db-load (scholia-session-file "copy")))
+                           (scholia-db-files
+                            (scholia-db-load (scholia-session-file "source")))))
+            (should (equal (scholia-db-session-name
+                            (scholia-db-load (scholia-session-file "copy")))
+                           "copy")))
+        (delete-file exported)))))
+
+(ert-deftest scholia-session-export-asks-before-it-replaces-a-file ()
+  "Exporting onto a path that exists asks, and a refusal leaves it whole.
+`read-file-name' completes onto existing files, so the one command that
+writes where the user points had been replacing them without a word."
+  (scholia-session-test--with-state
+    (let ((target (make-temp-file "scholia-target-" nil ".eld" "keep me\n")))
+      (unwind-protect
+          (progn
+            (scholia-session-test--seed
+             "source" "/nowhere/shared.txt"
+             (list (scholia-session-test--annotation "one" "a root")))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+              (should-error (scholia-session-export "source" target)
+                            :type 'scholia-session-error))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents target)
+                             (buffer-string))
+                           "keep me\n"))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+              (scholia-session-export "source" target))
+            (should (eq (car (with-temp-buffer
+                               (insert-file-contents target)
+                               (read (current-buffer))))
+                        :scholia)))
+        (delete-file target)))))
+
+(ert-deftest scholia-session-reads-an-interchange-file-without-rewriting-it ()
+  "Listing and importing leave the interchange file they were handed alone.
+An exported `.eld' is something to diff, commit and hand to a colleague,
+and migrating whatever path a caller points at turned a git-tracked file
+into a binary blob the moment a session prompt was opened."
+  (scholia-session-test--with-state
+    (let ((parked (expand-file-name "parked.eld" scholia-session-directory)))
+      (scholia-session-test--seed
+       "source" "/nowhere/shared.txt"
+       (list (scholia-session-test--annotation "one" "a root")))
+      (scholia-session-export "source" parked)
+      (should (member "parked" (scholia-session-list)))
+      (should-not (equal (scholia-test-file-magic parked)
+                         scholia-test-sqlite-magic))
+      (scholia-session-import parked "copy")
+      (should-not (equal (scholia-test-file-magic parked)
+                         scholia-test-sqlite-magic))
+      (should (equal (scholia-session-test--texts
+                      (scholia-session-test--stored "copy"
+                                                    "/nowhere/shared.txt"))
+                     '("a root"))))))
+
+
+;;;; The lifecycle of a store on disk
+
+(ert-deftest scholia-session-delete-and-rename-leave-nothing-of-the-old-name ()
+  "A deleted name comes back empty and a renamed one leaves no journals.
+Unlinking the `.eld' alone orphans the WAL and shared-memory files beside
+it, and the next session of the same name then either fails to open or
+comes back holding the deleted session's annotations verbatim."
+  (scholia-session-test--with-state
+    (scholia-session-test--seed
+     "notes" "/nowhere/kept.txt"
+     (list (scholia-session-test--annotation "one" "deleted with the session")))
+    (should (equal (scholia-test-file-magic (scholia-session-file "notes"))
+                   scholia-test-sqlite-magic))
+    (scholia-session-delete "notes")
+    (should-not (file-exists-p (scholia-session-file "notes")))
+    (should-not (scholia-session-test--journals))
+    (scholia-session-create "notes")
+    (should-not (scholia-db-files
+                 (scholia-db-load (scholia-session-file "notes"))))
+    (should-not (scholia-session-test--stored "notes" "/nowhere/kept.txt"))
+    (scholia-session-test--seed
+     "notes" "/nowhere/kept.txt"
+     (list (scholia-session-test--annotation "two" "carried to the new name")))
+    (scholia-session-rename "notes" "archive")
+    (should-not (file-exists-p (scholia-session-file "notes")))
+    (should-not (scholia-session-test--journals))
+    (should (equal (scholia-session-test--texts
+                    (scholia-session-test--stored
+                     "archive" "/nowhere/kept.txt"))
+                   '("carried to the new name")))
+    (let ((store (scholia-store-open (scholia-session-file "archive"))))
+      (unwind-protect
+          (progn
+            (scholia-store-put-record
+             store (scholia-db-make-record
+                    "/nowhere/second.txt"
+                    (list (scholia-session-test--annotation "three" "written"))
+                    "checksum"))
+            (should (scholia-session-test--journals))
+            (should (equal (scholia-session-list) '("archive"))))
+        (scholia-store-close store)))
+    (should-not (scholia-session-test--journals))))
 
 (provide 'scholia-session-test)
 ;;; scholia-session-test.el ends here
