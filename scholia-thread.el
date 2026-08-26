@@ -25,6 +25,9 @@
 (defconst scholia-thread--indent-width 2
   "Columns a reply is set in past the annotation it answers.")
 
+(defconst scholia-thread--continuation-string "┆ "
+  "Opens a line continuing the note above rather than a note of its own.")
+
 
 ;;;; The tree model
 
@@ -85,18 +88,24 @@ points, so a cycle an imported session carries terminates."
 Every note is set in one step past the note it answers, and a note
 carrying several lines sets each of them there, so its own lines stay
 flush with one another and every reply still reads as the deeper one.
-Each line is a button of its own carrying the annotation in the
-`scholia-annotation' property, so a multi-line note answers wherever it
-is clicked."
+A line continuing the note above it opens with
+`scholia-thread--continuation-string' where a note of its own opens with
+as many spaces, since the indent alone leaves a continuation line and a
+sibling reply carrying the same text identical.  Each line is a button of
+its own carrying the annotation in the `scholia-annotation' property, so
+a multi-line note answers wherever it is clicked."
   (scholia-thread-walk
    annotations
    (lambda (annotation depth)
      (let ((indent (make-string (* depth scholia-thread--indent-width) ?\s))
+           (opening (make-string (length scholia-thread--continuation-string)
+                                 ?\s))
            (lines (split-string (scholia-db-annotation-text annotation) "\n")))
        (dolist (line lines)
-         (insert indent)
+         (insert indent opening)
          (insert-text-button line 'scholia-annotation annotation)
-         (insert "\n"))))))
+         (insert "\n")
+         (setq opening scholia-thread--continuation-string))))))
 
 (provide 'scholia-thread)
 ;;; scholia-thread.el ends here

@@ -41,6 +41,9 @@
 (defconst scholia-export-buffer-name "*scholia-export*"
   "Buffer a `buffer' export is shown in.")
 
+(defconst scholia-export--no-newline "\\ No newline at end of file"
+  "How a patch marks a source whose last line ends in no newline.")
+
 
 ;;;; What a formatter renders against
 
@@ -49,6 +52,16 @@
 Only a buffer names one; reading a file into one is the session
 export's, so anything else answers with the current buffer."
   (if (bufferp file-or-buffer) file-or-buffer (current-buffer)))
+
+(defun scholia-export--buffer-lines ()
+  "Return the lines of the current buffer, its trailing empty one among them.
+The whole buffer is read whatever it is narrowed to: an annotation
+carries absolute positions, so a restriction would renumber the source
+out from under it."
+  (split-string (save-restriction
+                  (widen)
+                  (buffer-substring-no-properties (point-min) (point-max)))
+                "\n"))
 
 (defun scholia-export--name (file-or-buffer)
   "Return the name a rendering gives FILE-OR-BUFFER.
@@ -240,19 +253,14 @@ and the replies it carries."
   "Return the source of FILE-OR-BUFFER carrying ANNOTATIONS as comments.
 Each annotation is written below the line it was taken against, leaving
 the source itself as it stands, and the replies no line holds trail the
-source as comments of their own.  The whole file is read whatever it is
-narrowed to: an annotation carries absolute positions, so a restriction
-would renumber the source out from under it."
+source as comments of their own."
   (with-current-buffer (scholia-export--source-buffer file-or-buffer)
     (let* ((start (or comment-start scholia-export--fallback-comment))
            (end (or comment-end ""))
            (threads (scholia-export--threads annotations))
-           (source (save-restriction
-                     (widen)
-                     (buffer-substring-no-properties (point-min) (point-max))))
            (number 0)
            (output nil))
-      (dolist (line (split-string source "\n"))
+      (dolist (line (scholia-export--buffer-lines))
         (setq number (1+ number))
         (push line output)
         (dolist (thread (scholia-export--threads-on (car threads) number))
@@ -276,48 +284,103 @@ the hunks go out in."
                           threads))
         #'<))
 
-(defun scholia-export--hunks (threads start end)
+(defun scholia-export--runs (lines)
+  "Return LINES gathered into the neighbouring groups they form.
+A hunk quotes the line after the last one it annotates, so two annotated
+lines that are neighbours would each quote the other and neither
+`git apply' nor patch(1) takes two hunks quoting one line.  Neighbours
+therefore go out as a single hunk."
+  (let ((runs nil))
+    (dolist (line lines)
+      (if (and runs (= line (1+ (car (car runs)))))
+          (push line (car runs))
+        (push (list line) runs)))
+    (mapcar #'nreverse (nreverse runs))))
+
+(defun scholia-export--context (lines)
+  "Return LINES as the context a hunk quotes the source by.
+Each answers for one line of the source and counts as one line of a
+hunk, the last of them carrying the marker a patch reads a source ending
+in no newline by."
+  (let* ((terminated (equal (car (last lines)) ""))
+         (quoted (mapcar (lambda (line) (concat " " line))
+                         (if terminated (butlast lines) lines))))
+    (if (or terminated (null quoted))
+        quoted
+      (append (butlast quoted)
+              (list (concat (car (last quoted))
+                            "\n" scholia-export--no-newline))))))
+
+(defun scholia-export--added (body)
+  "Return how many lines of BODY are additions to the source it quotes."
+  (seq-count (lambda (line) (string-prefix-p "+" line)) body))
+
+(defun scholia-export--hunk (threads run start end trailing offset)
+  "Return the hunk adding the THREADS taken against RUN.
+The comments are commented by START and END, TRAILING is the context
+line the hunk closes on or nil where RUN ends the file, and OFFSET is
+how many lines the hunks ahead of this one added."
+  (let ((body nil))
+    (dolist (line run)
+      (let ((on (scholia-export--threads-on threads line)))
+        (push (concat " " (scholia-db-annotation-line-text
+                           (scholia-export--root (car on))))
+              body)
+        (dolist (thread on)
+          (dolist (comment (scholia-export--comment-block thread start end))
+            (push (concat "+" comment) body)))))
+    (when trailing
+      (push trailing body))
+    (setq body (nreverse body))
+    (let ((quoted (+ (length run) (if trailing 1 0))))
+      (cons (format "@@ -%d,%d +%d,%d @@"
+                    (car run) quoted (+ (car run) offset)
+                    (+ quoted (scholia-export--added body)))
+            body))))
+
+(defun scholia-export--hunks (threads start end context)
   "Return the hunks adding THREADS, commented by START and END.
-One hunk per source line: two annotations on one line are normal, and
-two hunks naming that line make a patch `git apply' rejects as corrupt.
-Each hunk's new starting line counts the lines the hunks ahead of it
-added, which is what the new file is numbered in.  The annotated line is
-the only context a hunk carries, so a rendering made long after the file
-changed still applies as a patch of its own."
+CONTEXT holds the source read as the lines a hunk quotes it by, one for
+each line of the file.  A hunk quotes the line it annotates and the line
+after it: without that trailing line both `git apply' and patch(1) read
+the hunk as anchored to the end of the file and reject every export
+whose last annotation is not on the last line.  Two annotations on one
+line therefore share a hunk, and so do two annotated lines that are
+neighbours.  Each hunk's new starting line counts the lines the hunks
+ahead of it added, which is what the new file is numbered in."
   (let ((offset 0)
         (hunks nil))
-    (dolist (line (scholia-export--source-lines threads))
-      (let* ((on (scholia-export--threads-on threads line))
-             (added (mapcan (lambda (thread)
-                              (scholia-export--comment-block thread start end))
-                            on)))
-        (push (append
-               (list (format "@@ -%d,1 +%d,%d @@"
-                             line (+ line offset) (1+ (length added)))
-                     (concat " " (scholia-db-annotation-line-text
-                                  (scholia-export--root (car on)))))
-               (mapcar (lambda (comment) (concat "+" comment)) added))
-              hunks)
-        (setq offset (+ offset (length added)))))
+    (dolist (run (scholia-export--runs
+                  (scholia-export--source-lines threads)))
+      (let ((hunk (scholia-export--hunk threads run start end
+                                        (nth (car (last run)) context)
+                                        offset)))
+        (push hunk hunks)
+        (setq offset (+ offset (scholia-export--added (cdr hunk))))))
     (apply #'append (nreverse hunks))))
 
 (defun scholia-export-diff (annotations &optional file-or-buffer)
   "Return ANNOTATIONS as a unified diff adding them to FILE-OR-BUFFER.
 The headers carry no timestamp, so the same annotations render the same
-diff however often they are exported.  The replies no line holds trail
-the last hunk as comments, past where the patch ends: a note is free
-text, and a raw line of one reading as `---' or `@@' would be parsed as
-patch of its own."
+diff however often they are exported.  The source is read for the
+context its hunks quote it by as well as for its comment syntax, so a
+rendering answers for the file as it stands rather than for the snapshot
+alone.  The replies no line holds trail the last hunk as comments, past
+where the patch ends: a note is free text, and a raw line of one reading
+as `---' or `@@' would be parsed as patch of its own."
   (let ((name (scholia-export--name file-or-buffer))
         (threads (scholia-export--threads annotations))
         (start nil)
-        (end nil))
+        (end nil)
+        (context nil))
     (with-current-buffer (scholia-export--source-buffer file-or-buffer)
       (setq start (or comment-start scholia-export--fallback-comment))
-      (setq end (or comment-end "")))
+      (setq end (or comment-end ""))
+      (setq context (scholia-export--context
+                     (scholia-export--buffer-lines))))
     (string-join
      (append (list (concat "--- " name) (concat "+++ " name))
-             (scholia-export--hunks (car threads) start end)
+             (scholia-export--hunks (car threads) start end context)
              (mapcar (lambda (line)
                        (scholia-export--comment line 0 start end))
                      (scholia-export--orphan-block (cdr threads))))

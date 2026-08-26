@@ -285,7 +285,9 @@ FILE is read before anything is written, so one carrying no scholia
 version tag signals `scholia-db-format-error' and leaves NAME unmade.  A
 NAME already taken keeps its header and everything it holds, and the
 records of FILE are merged into it, annotations shared by id counting
-once.
+once.  A reply arriving without the annotation it answers is stamped
+before the merge is written, since the record it lands in may belong to
+a file no buffer here visits and nothing else would reach it.
 
 Every buffer resolving to NAME stores what it holds before the merge
 reads NAME and is redrawn after it is written, the way
@@ -302,7 +304,8 @@ written back out of existence by its next save."
       (with-current-buffer buffer
         (scholia-save-annotations)))
     (scholia-db-write target
-                      (scholia-db-merge (scholia-db-load target) incoming))
+                      (scholia-db-stamp-orphans
+                       (scholia-db-merge (scholia-db-load target) incoming)))
     (dolist (buffer affected)
       (with-current-buffer buffer
         (scholia-shutdown nil)

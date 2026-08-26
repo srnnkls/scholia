@@ -107,15 +107,15 @@ directory.  Everything is put back when BODY exits, however it exits."
               (lambda (&rest _) (error "Resolution asked the user"))))
      ,@body))
 
-(defun scholia-session-test--annotation (id text)
-  "Return a stored annotation carrying ID and TEXT.
-Its source context names a line no fixture buffer holds, so a write that
-snapshots it afresh against the current buffer is visible in the values
-that come back."
+(defun scholia-session-test--annotation (id text &optional beg end)
+  "Return a stored annotation carrying ID and TEXT over BEG to END.
+BEG and END default to the bounds of \"alpha\".  Its source context names
+a line no fixture buffer holds, so a write that snapshots it afresh
+against the current buffer is visible in the values that come back."
   (list :id id
         :text text
-        :beg 1
-        :end 6
+        :beg (or beg 1)
+        :end (or end 6)
         :annotated-text "alpha"
         :line 42
         :line-text "the whole stored line"
@@ -523,7 +523,8 @@ and its next save mints the old name afresh."
               (scholia-db-load outside)
               (scholia-db-make-record
                "/nowhere/shared.txt"
-               (list (scholia-session-test--annotation "two" "from outside"))
+               (list (scholia-session-test--annotation "two" "from outside"
+                                                       7 11))
                "seeded")))
             (scholia-session-test--seed
              "target" "/nowhere/shared.txt"
@@ -549,6 +550,38 @@ and its next save mints the old name afresh."
             (should-not (file-exists-p (scholia-session-file "refused"))))
         (delete-file outside)
         (delete-file nonsense)))))
+
+(ert-deftest scholia-session-import-stamps-a-reply-that-arrived-without-its-parent ()
+  (scholia-session-test--with-state
+    (let ((outside (make-temp-file "scholia-outside-" nil ".eld")))
+      (unwind-protect
+          (progn
+            (scholia-db-create-session outside)
+            (scholia-db-write
+             outside
+             (scholia-db-put-record
+              (scholia-db-load outside)
+              (scholia-db-make-record
+               "/nowhere/stray.txt"
+               (list (scholia-session-test--annotation "kept" "a root")
+                     (scholia-db-make-annotation "stray" "answers nothing"
+                                                 nil nil nil nil nil "gone"))
+               "seeded")))
+            (scholia-session-import outside "imported")
+            (let* ((stored (scholia-session-test--stored "imported"
+                                                         "/nowhere/stray.txt"))
+                   (stray (seq-find #'scholia-db-annotation-reply-p stored))
+                   (kept (seq-find (lambda (annotation)
+                                     (equal (scholia-db-annotation-id annotation)
+                                            "kept"))
+                                   stored)))
+              (should (equal (scholia-db-annotation-orphaned-from stray) "gone"))
+              (should (string-match-p "\\`[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]T"
+                                      (scholia-db-annotation-orphaned-at stray)))
+              (should (equal (scholia-db-annotation-text stray)
+                             "answers nothing"))
+              (should-not (scholia-db-annotation-orphaned-from kept))))
+        (delete-file outside)))))
 
 (provide 'scholia-session-test)
 ;;; scholia-session-test.el ends here

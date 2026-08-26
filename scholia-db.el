@@ -439,7 +439,11 @@ Source context is snapshot from the current buffer, which is the one
 visiting FILE.  Fields an incoming annotation does not carry are taken
 from the stored annotation of the same id, so a send history survives
 every later save.  Replies already stored for FILE are folded back in as
-they are, since they carry no position to recompute.
+they are, since they carry no position to recompute.  A reply reaches
+here among ANNOTATIONS only on the save that makes it and comes back
+from the record on every save after, so it is filed behind the replies
+already stored rather than ahead of them and a thread keeps the order it
+was written in.
 
 PRESERVE holds stored annotations the caller could not rebuild from the
 buffer, folded back in exactly as they are and so neither snapshot nor
@@ -460,8 +464,10 @@ distance, having just been snapshot here.  Once nothing is preserved
 CHECKSUM is stored again and the record heals.
 
 A reply in the record being written whose parent is not in it is stamped
-by `scholia-db--stamp-orphans' rather than dropped, which is also how an
-orphan arriving through an import or a merge is caught."
+by `scholia-db--stamp-orphans' rather than dropped.  That reaches this
+record and no other, so an orphan arriving through an import is stamped
+by `scholia-session-import' at the seam it merges on rather than waiting
+here for a save of the file it answers."
   (let* ((db (scholia-db--publish-session (scholia-db-load session-file)
                                           session-file))
          (stored (scholia-db-record-annotations (scholia-db-record db file)))
@@ -469,6 +475,8 @@ orphan arriving through an import or a merge is caught."
                               (scholia-db--carry-forward
                                (scholia-db--snapshot annotation) stored))
                             annotations))
+         (placed (seq-remove #'scholia-db-annotation-reply-p snapshots))
+         (made (seq-filter #'scholia-db-annotation-reply-p snapshots))
          (ids (mapcar #'scholia-db-annotation-id snapshots))
          (replies (seq-filter
                    (lambda (annotation)
@@ -485,7 +493,7 @@ orphan arriving through an import or a merge is caught."
                        (scholia-db-put-record
                         db (scholia-db-make-record
                             file (scholia-db--stamp-orphans
-                                  (append snapshots replies unplaced))
+                                  (append placed replies made unplaced))
                             (if unplaced
                                 (scholia-db-record-checksum
                                  (scholia-db-record db file))
@@ -622,10 +630,13 @@ Replies cover no text and so never overlap anything."
        (< (scholia-db-annotation-beg a) (scholia-db-annotation-end b))
        (< (scholia-db-annotation-beg b) (scholia-db-annotation-end a))))
 
-(defun scholia-db-merge-annotations (host guest)
-  "Return HOST widened over GUEST, or nil when the two do not overlap.
-HOST keeps its id and the merged annotated text is read from the current
-buffer, which is the one both annotate."
+(defun scholia-db-widen-over (host guest)
+  "Return HOST spanning GUEST and carrying both notes, or nil when disjoint.
+HOST keeps its id and the `:annotated-text' it was stored with, which
+after the widening covers less than the interval does.  Reading the text
+the wider interval now holds takes the buffer annotating it, and a merge
+of records is done wherever the user ran it rather than in that buffer,
+so the reading is left to the next save that has it."
   (when (scholia-db-annotations-overlap-p host guest)
     (let ((interval (scholia-db-merge-interval
                      (scholia-db-annotation-interval host)
@@ -636,13 +647,27 @@ buffer, which is the one both annotate."
        :end (cdr interval)
        :text (concat (scholia-db-annotation-text host)
                      " "
-                     (scholia-db-annotation-text guest))
-       :annotated-text (buffer-substring-no-properties (car interval)
-                                                       (cdr interval))))))
+                     (scholia-db-annotation-text guest))))))
 
-(defun scholia-db-remove-overlaps (annotations)
-  "Return ANNOTATIONS with every overlapping pair merged into one."
+(defun scholia-db-merge-annotations (host guest)
+  "Return HOST widened over GUEST, or nil when the two do not overlap.
+HOST keeps its id and the merged annotated text is read from the current
+buffer, which is the one both annotate."
+  (let ((merged (scholia-db-widen-over host guest)))
+    (when merged
+      (scholia-db--with-fields
+       merged
+       :annotated-text (buffer-substring-no-properties
+                        (scholia-db-annotation-beg merged)
+                        (scholia-db-annotation-end merged))))))
+
+(defun scholia-db-remove-overlaps (annotations &optional merge)
+  "Return ANNOTATIONS with every overlapping pair merged into one.
+MERGE folds a pair and defaults to `scholia-db-merge-annotations', which
+reads the merged text from the current buffer; a caller folding a record
+of a file no buffer visits passes `scholia-db-widen-over' instead."
   (let ((rest annotations)
+        (fold (or merge #'scholia-db-merge-annotations))
         (collapsed nil))
     (while rest
       (let* ((probe (pop rest))
@@ -651,7 +676,7 @@ buffer, which is the one both annotate."
                                        probe annotation))
                                     rest)))
         (if overlapping
-            (setq rest (cons (scholia-db-merge-annotations probe overlapping)
+            (setq rest (cons (funcall fold probe overlapping)
                              (remq overlapping rest)))
           (push probe collapsed))))
     (nreverse collapsed)))
@@ -659,16 +684,37 @@ buffer, which is the one both annotate."
 (defun scholia-db--merge-records (host guest)
   "Return the record HOST holding the annotations of record GUEST as well.
 Annotations GUEST shares with HOST by id are the same annotation and are
-taken once."
+taken once.  Two that cover the same characters are one annotation the
+two sessions each hold their own of, and they are folded into one
+spanning both and carrying both notes: `scholia-annotate' refuses to make
+an overlapping pair, so a record holding one would leave every annotation
+underneath unreachable by `scholia-annotation-at' and so by every command
+that reads it."
   (let ((ids (mapcar #'scholia-db-annotation-id
                      (scholia-db-record-annotations host))))
     (scholia-db-make-record
      (scholia-db-record-file host)
-     (append (scholia-db-record-annotations host)
-             (seq-remove (lambda (annotation)
-                           (member (scholia-db-annotation-id annotation) ids))
-                         (scholia-db-record-annotations guest)))
+     (scholia-db-remove-overlaps
+      (append (scholia-db-record-annotations host)
+              (seq-remove (lambda (annotation)
+                            (member (scholia-db-annotation-id annotation) ids))
+                          (scholia-db-record-annotations guest)))
+      #'scholia-db-widen-over)
      (scholia-db-record-checksum host))))
+
+(defun scholia-db-stamp-orphans (db)
+  "Return DB with every reply that lost its parent stamped, record by record.
+A merge is the one moment a reply can arrive whose parent nothing holds,
+and the record it lands in may belong to a file no buffer visits, whose
+next save is the only other thing that would stamp it."
+  (scholia-db--with-fields
+   db :records (mapcar (lambda (record)
+                         (scholia-db-make-record
+                          (scholia-db-record-file record)
+                          (scholia-db--stamp-orphans
+                           (scholia-db-record-annotations record))
+                          (scholia-db-record-checksum record)))
+                       (plist-get db :records))))
 
 (defun scholia-db-merge (db-a db-b)
   "Return DB-A holding the records of DB-B as well, joined file by file."

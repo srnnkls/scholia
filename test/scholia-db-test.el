@@ -279,6 +279,26 @@ COUNT defaults to the first occurrence."
                                '("id-gamma" "id-reply")))))))))))
 
 
+(ert-deftest scholia-db-save-files-a-new-reply-after-the-ones-already-stored ()
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer scholia-db-test--source
+      (let* ((file (buffer-file-name buffer))
+             (session (scholia-db-test--session-file "reply-order"))
+             (gamma (scholia-db-test--annotation
+                     "id-gamma" "on gamma" (scholia-db-test--bounds "gamma"))))
+        (dolist (made '(("id-one" . "ONE")
+                        ("id-two" . "TWO")
+                        ("id-three" . "THREE")))
+          (scholia-db-save session file
+                           (list gamma
+                                 (scholia-db-test--reply (car made) (cdr made)
+                                                         "id-gamma"))
+                           "checksum-one"))
+        (should (equal (mapcar #'scholia-db-annotation-text
+                               (scholia-db-test--annotations session file))
+                       '("on gamma" "ONE" "TWO" "THREE")))))))
+
+
 (ert-deftest scholia-db-save-stamps-a-reply-that-lost-its-parent ()
   (scholia-test-with-session-directory
     (scholia-test-with-temp-file-buffer buffer scholia-db-test--source
@@ -644,6 +664,35 @@ COUNT defaults to the first occurrence."
                               (scholia-db-record-annotations
                                (scholia-db-record merged other)))
                              '("id-other"))))))))))
+
+(ert-deftest scholia-db-merge-folds-an-overlapping-guest-into-the-host ()
+  (let* ((file "/nowhere/shared.txt")
+         (host (scholia-db-make-annotation "id-host" "host note" 5 10 "hello"))
+         (guest (scholia-db-make-annotation "id-guest" "guest note" 5 12
+                                            "hello wor"))
+         (reply (scholia-db-make-annotation "id-reply" "under the guest"
+                                            nil nil nil nil nil "id-guest"))
+         (elsewhere (scholia-db-make-annotation "id-far" "far note" 40 44
+                                                "away"))
+         (merged (scholia-db-merge
+                  (scholia-db-put-record
+                   (list :scholia 1 :records nil)
+                   (scholia-db-make-record file (list host) "host-sum"))
+                  (scholia-db-put-record
+                   (list :scholia 1 :records nil)
+                   (scholia-db-make-record file (list guest reply elsewhere)
+                                           "guest-sum"))))
+         (stored (scholia-db-record-annotations (scholia-db-record merged file)))
+         (folded (scholia-db-test--with-id "id-host" stored)))
+    (should (equal (scholia-db-test--ids stored)
+                   '("id-far" "id-host" "id-reply")))
+    (should (equal (scholia-db-annotation-interval folded) '(5 . 12)))
+    (should (string-match-p "host note" (scholia-db-annotation-text folded)))
+    (should (string-match-p "guest note" (scholia-db-annotation-text folded)))
+    (should (equal (scholia-db-annotation-annotated-text folded) "hello"))
+    (should (equal (scholia-db-annotation-interval
+                    (scholia-db-test--with-id "id-far" stored))
+                   '(40 . 44)))))
 
 (provide 'scholia-db-test)
 ;;; scholia-db-test.el ends here

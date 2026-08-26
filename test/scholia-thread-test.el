@@ -200,5 +200,17 @@ Signal an ERT test failure when TEXT was not rendered."
                           (button-get button 'scholia-annotation))
                          (car expected))))))))
 
+(ert-deftest scholia-thread-render-tells-a-continued-note-from-a-sibling-reply ()
+  (let ((annotations
+         (list (scholia-thread-test--annotation "id-a" "root note")
+               (scholia-thread-test--reply "id-b" "first line\nsecond line"
+                                           "id-a")
+               (scholia-thread-test--reply "id-c" "second line" "id-a"))))
+    (with-temp-buffer
+      (scholia-thread-render annotations)
+      (let ((lines (split-string (buffer-string) "\n" t)))
+        (should (equal (length lines) 4))
+        (should-not (equal (nth 2 lines) (nth 3 lines)))))))
+
 (provide 'scholia-thread-test)
 ;;; scholia-thread-test.el ends here

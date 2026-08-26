@@ -50,6 +50,17 @@ snapshot therefore renders different text and a different column."
         :reply-to nil
         :sends nil))
 
+(defun scholia-export-test--on-line (id line text)
+  "Return the annotation ID carrying TEXT against LINE of the fixture.
+Its source context agrees with the fixture buffer, which is what an
+annotation taken against a file on disk carries and what a patch quoting
+that file has to read as."
+  (let ((annotation (scholia-export-test--annotation id text)))
+    (plist-put annotation :line line)
+    (plist-put annotation :line-text
+               (nth (1- line)
+                    (split-string scholia-export-test--source "\n")))))
+
 (defun scholia-export-test--reply (id text parent-id)
   "Return a reply with ID carrying TEXT and answering PARENT-ID."
   (list :id id
@@ -110,6 +121,14 @@ first character of the source line above the carets."
   "Return the lines of OUTPUT carrying a caret run."
   (seq-filter (lambda (line) (string-match-p "\\^" line))
               (split-string output "\n")))
+
+(defun scholia-export-test--hunks (output)
+  "Return the hunks of OUTPUT, each its header ahead of its body."
+  (let ((hunks nil))
+    (dolist (line (split-string (string-trim-right output "\n+") "\n"))
+      (cond ((string-prefix-p "@@" line) (push (list line) hunks))
+            (hunks (push line (car hunks)))))
+    (mapcar #'nreverse (nreverse hunks))))
 
 (defun scholia-export-test--source-lines (output)
   "Return the lines of OUTPUT that carry no `;;' comment."
@@ -240,14 +259,37 @@ first character of the source line above the carets."
            (added (seq-filter (lambda (line) (string-prefix-p "+" line)) body)))
       (should (equal (nth 0 lines) (concat "--- " file)))
       (should (equal (nth 1 lines) (concat "+++ " file)))
-      (should (string-match "\\`@@ -2,1 \\+2,\\([0-9]+\\) @@\\'" (nth 2 lines)))
+      (should (string-match "\\`@@ -2,2 \\+2,\\([0-9]+\\) @@\\'" (nth 2 lines)))
       (should (equal (string-to-number (match-string 1 (nth 2 lines)))
-                     (1+ (length added))))
+                     (+ 2 (length added))))
       (should (equal (nth 3 lines) " int gamma = delta;"))
       (should (seq-every-p (lambda (line) (memq (aref line 0) '(?\s ?+ ?-))) body))
       (should (seq-every-p (lambda (line) (string-match-p ";;" line)) added))
       (should (seq-find (lambda (line) (string-match-p "check this" line)) added))
       (should (seq-find (lambda (line) (string-match-p "id-a" line)) added)))))
+
+(ert-deftest scholia-export-diff-quotes-the-line-after-what-it-annotates ()
+  (let* ((apart (scholia-export-test--render-in
+                 #'emacs-lisp-mode
+                 (list (scholia-export-test--on-line "id-a" 1 "first")
+                       (scholia-export-test--on-line "id-c" 3 "third"))
+                 'diff))
+         (hunks (scholia-export-test--hunks apart))
+         (neighbours (scholia-export-test--hunks
+                      (scholia-export-test--render-in
+                       #'emacs-lisp-mode
+                       (list (scholia-export-test--on-line "id-a" 1 "first")
+                             (scholia-export-test--on-line "id-b" 2 "second"))
+                       'diff))))
+    (should (equal (mapcar #'car hunks) '("@@ -1,2 +1,5 @@" "@@ -3,1 +6,4 @@")))
+    (should (equal (car (last (nth 0 hunks))) "     gamma delta"))
+    (should (equal (nth 1 (nth 0 hunks)) " alpha beta"))
+    (should (string-prefix-p "+" (car (last (nth 1 hunks)))))
+    (should (equal (nth 1 (nth 1 hunks)) " epsilon zeta"))
+    (should (equal (mapcar #'car neighbours) '("@@ -1,3 +1,9 @@")))
+    (should (equal (seq-filter (lambda (line) (string-prefix-p " " line))
+                               (cdr (car neighbours)))
+                   '(" alpha beta" "     gamma delta" " epsilon zeta")))))
 
 
 ;;;; Dispatch
