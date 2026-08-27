@@ -347,8 +347,11 @@ many replies it wrote over."
   "Start a second Emacs evaluating FORM and return the process.
 FORM runs once `scholia-db' has been required out of this worktree, so
 the second process writes through the same code as the first.  The child
-announces itself on stdout first, so a caller can tell a writer that is
-blocked from one that is still starting Emacs."
+announces itself first, so a caller can tell a writer that is blocked
+from one that is still starting Emacs.  It announces through `message'
+rather than `princ' because Emacs block-buffers batch stdout to a pipe on
+Windows, where a child that then blocks holds the marker until it exits;
+batch `message' goes to stderr, which Emacs flushes on every write."
   (let* ((buffer (generate-new-buffer " *scholia-store-test*"))
          (process
           (start-process
@@ -360,27 +363,37 @@ blocked from one that is still starting Emacs."
               `(progn (setq load-prefer-newer t)
                       (push ,scholia-test-project-root load-path)
                       (require 'scholia-db)
-                      (princ ,(concat scholia-store-test--ready "\n"))
+                      (message ,scholia-store-test--ready)
                       ,form))))))
     (set-process-query-on-exit-flag process nil)
     process))
 
+(defun scholia-store-test--announced-p (process)
+  "Return non-nil once PROCESS has said it is loaded."
+  (with-current-buffer (process-buffer process)
+    (save-excursion
+      (goto-char (point-min))
+      (search-forward scholia-store-test--ready nil t))))
+
 (defun scholia-store-test--await-ready (process)
   "Wait until PROCESS has loaded and is about to write.
 Signal an ERT test failure when it never says so, which is a child that
-died on the way up rather than one this test can reason about."
+died on the way up rather than one this test can reason about.  The
+failure carries what the child said and whether it is still alive,
+because a bare timeout does not tell a child that died on the way up from
+one whose announcement never crossed the pipe."
   (let ((deadline (+ (float-time) 30)))
     (while (and (process-live-p process)
                 (< (float-time) deadline)
-                (not (with-current-buffer (process-buffer process)
-                       (save-excursion
-                         (goto-char (point-min))
-                         (search-forward scholia-store-test--ready nil t)))))
+                (not (scholia-store-test--announced-p process)))
       (accept-process-output process 0.01)))
-  (should (with-current-buffer (process-buffer process)
-            (save-excursion
-              (goto-char (point-min))
-              (search-forward scholia-store-test--ready nil t)))))
+  (unless (scholia-store-test--announced-p process)
+    (ert-fail (list "the second Emacs never announced itself"
+                    :emacs scholia-store-test--emacs
+                    :live (process-live-p process)
+                    :status (process-status process)
+                    :said (with-current-buffer (process-buffer process)
+                            (buffer-string))))))
 
 (defun scholia-store-test--outcome (process)
   "Return 0 when PROCESS exited cleanly, and what it said when it did not."
