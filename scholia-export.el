@@ -426,9 +426,8 @@ one of them."
             (and file
                  (seq-filter #'scholia-db-annotation-reply-p
                              (scholia-db-record-annotations
-                              (scholia-db-record
-                               (scholia-db-load (scholia-session-file))
-                               file)))))))
+                              (scholia-db-record (scholia-session-file)
+                                                 file)))))))
 
 (defun scholia-export--show (output)
   "Show OUTPUT in `scholia-export-buffer-name'."

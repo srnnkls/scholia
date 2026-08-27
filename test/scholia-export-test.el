@@ -361,5 +361,38 @@ first character of the source line above the carets."
           (when (file-exists-p target)
             (delete-file target)))))))
 
+
+;;;; What the payload reads
+
+(ert-deftest scholia-export-carries-a-reply-that-reached-the-store-from-outside ()
+  "An export folds in a reply no chain on screen holds.
+A reply is kept by the record alone, so an export built from the buffer
+drops every one, and the reply an agent made by id into the live session
+while Emacs was open is exactly the reply this export is supposed to
+carry.  A payload reading the interchange path instead of the store finds
+something that is not the session at all and comes back empty."
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer scholia-export-test--source
+      (scholia-mode 1)
+      (scholia-create-chain 22 27 "check this")
+      (scholia-save-annotations)
+      (let* ((session (scholia-session-file))
+             (file (buffer-file-name buffer))
+             (stored (scholia-db-record-annotations
+                      (scholia-db-record session file)))
+             (parent (scholia-db-annotation-id (car stored)))
+             (output nil))
+        (should (equal (length stored) 1))
+        (should parent)
+        (scholia-db-add-reply
+         session file
+         (scholia-export-test--reply "id-outside" "from the agent" parent))
+        (should-not (seq-find #'scholia-db-annotation-reply-p
+                              (scholia-core--buffer-annotations)))
+        (setq output (scholia-export))
+        (should (equal (scholia-export-test--count "from the agent" output) 1))
+        (should (equal (scholia-export-test--count "check this" output) 1))
+        (should (equal (scholia-export-test--count "-->" output) 1))))))
+
 (provide 'scholia-export-test)
 ;;; scholia-export-test.el ends here

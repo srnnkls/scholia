@@ -305,13 +305,12 @@ render did not reach is reported by name and kept in the record."
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
   (let ((file (scholia-buffer-file)))
     (when (and file (not (scholia-buffer-chains)))
-      (let ((db (scholia-db-load (scholia-session-file))))
+      (let ((record (scholia-db-record (scholia-session-file) file)))
         (setq scholia--unplaced-annotations
               (seq-remove #'scholia-db-annotation-reply-p
-                          (scholia-db-record-annotations
-                           (scholia-db-record db file))))
+                          (scholia-db-record-annotations record)))
         (scholia-core--restore-placed
-         (scholia-db-buffer-annotations db file (scholia-buffer-checksum)))
+         (scholia-db-buffer-annotations record (scholia-buffer-checksum)))
         (when scholia--unplaced-annotations
           (scholia-core--report
            "%s changed on disk: %s kept but not shown"

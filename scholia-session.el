@@ -43,18 +43,6 @@
     (scholia-session--refuse "Not a session name: %S" name))
   name)
 
-(defun scholia-session--read (file)
-  "Return the database FILE carries, writing nothing to FILE.
-Listing the sessions and importing one both reach files that are the
-caller's rather than the store's, and `scholia-db-load' migrates the
-path it is handed: an exported `.eld' parked in the session directory
-would be converted the moment a session prompt was opened, and a
-colleague's export could not be imported at all from a directory
-scholia cannot write to."
-  (if (scholia-store-interchange-p file)
-      (scholia-store-read-interchange file)
-    (scholia-db-load file)))
-
 (defun scholia-session--session-file-p (name)
   "Return non-nil when NAME answers to a database carrying a session header.
 Reading the header is what tells a session apart from the other files
@@ -63,9 +51,7 @@ store.  Anything the read raises answers no, so a file that is
 unreadable, a directory, or no session name at all costs the caller the
 one entry rather than the whole listing."
   (condition-case nil
-      (and (scholia-db-session-name
-            (scholia-session--read (scholia-session-file name)))
-           t)
+      (scholia-db-session-file-p (scholia-session-file name))
     (error nil)))
 
 (defun scholia-session-list ()
@@ -207,6 +193,18 @@ answers to the name every buffer then annotates into."
 
 ;;;; The commands
 
+(defun scholia-session--taken-p (file)
+  "Return non-nil when FILE is one `scholia-session-create' must not take.
+A file carrying a session is taken, and so is one that cannot be read as
+scholia's at all: freeing a name for anything unreadable would empty a
+file scholia never made.  A database carrying no session header is
+neither, and is what a first write killed outright leaves behind: the
+name it sits at answers to no session, so the next create writes its
+header into it rather than reporting a session nothing can open."
+  (condition-case nil
+      (scholia-db-session-file-p file)
+    (error t)))
+
 (defun scholia-session-create (name)
   "Make a session called NAME, holding no annotation yet.
 No buffer changes the session it annotates into; `scholia-session-switch'
@@ -214,7 +212,7 @@ does that.  A NAME already taken is refused rather than emptied."
   (interactive (list (read-string "New session: ")))
   (scholia-session--check-name name)
   (let ((file (scholia-session-file name)))
-    (when (file-exists-p file)
+    (when (scholia-session--taken-p file)
       (scholia-session--refuse "A session called %s already exists" name))
     (scholia-db-create-session file)
     name))
@@ -271,9 +269,7 @@ them orphaned at a name nothing answers to."
       (with-current-buffer buffer
         (scholia-save-annotations)))
     (scholia-store-rename source target)
-    (scholia-db-write target
-                      (scholia-db-set-session-name (scholia-db-load target)
-                                                   new))
+    (scholia-db-set-session-name target new)
     (scholia-session--rebind old new)
     new))
 
@@ -320,7 +316,7 @@ user named asks."
     (when (and (file-exists-p file)
                (not (yes-or-no-p (format "Replace %s? " file))))
       (scholia-session--refuse "Not replacing %s" file))
-    (scholia-store-write-interchange file (scholia-db-load source))
+    (scholia-store-write-interchange file (scholia-db-interchange source))
     file))
 
 (defun scholia-session-import (file name)
@@ -341,15 +337,13 @@ written back out of existence by its next save."
   (interactive (list (read-file-name "Session file: " nil nil t)
                      (read-string "Import as: ")))
   (scholia-session--check-name name)
-  (let* ((incoming (scholia-session--read file))
+  (let* ((incoming (scholia-db-interchange file))
          (target (scholia-session-file name))
          (affected (scholia-session--buffers-of (list name))))
     (dolist (buffer affected)
       (with-current-buffer buffer
         (scholia-save-annotations)))
-    (scholia-db-write target
-                      (scholia-db-stamp-orphans
-                       (scholia-db-merge (scholia-db-load target) incoming)))
+    (scholia-db-import target incoming)
     (dolist (buffer affected)
       (with-current-buffer buffer
         (scholia-shutdown nil)

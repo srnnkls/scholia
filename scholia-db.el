@@ -11,9 +11,12 @@
 
 ;;; Commentary:
 
-;; Reads and writes the session databases scholia annotates into.  The
-;; value every consumer sees is a plist tagged with its format version;
-;; `scholia-store' keeps it in rows underneath.
+;; Reads and writes the session databases scholia annotates into.  A
+;; consumer names the session file and the record it wants, and each
+;; entry point is one transaction on that session: a save, a reply or a
+;; removal reaches the rows it names and leaves every other row where
+;; another writer left it.  The whole-value plist survives as the
+;; interchange a session is exported and imported as.
 
 ;;; Code:
 
@@ -29,34 +32,96 @@
     copy))
 
 
+;;;; The store a session is reached through
+
+(defun scholia-db--present-p (session-file)
+  "Return non-nil when SESSION-FILE carries a session to read or to write.
+A file that is not there and one holding nothing yet both answer no: a
+kill mid-sync or a partly fetched checkout leave a file holding no
+database to be wrong about, and the next write fills it.  The size is
+read off one stat rather than a test and a read of it, since a session
+is renamed away by the Emacs migrating it off the printed plist."
+  (let ((size (file-attribute-size (file-attributes session-file))))
+    (and size (not (zerop size)))))
+
+(defun scholia-db--reading (session-file read)
+  "Return what READ takes from a store opened on SESSION-FILE.
+A SESSION-FILE holding no session yet reads as nothing and is not made by
+being read.  One still holding the printed plist scholia stored before is
+migrated into a database at that same path on the way through, and one
+carrying a database that is not scholia's signals
+`scholia-db-format-error' rather than being guessed at.
+
+READ takes everything it takes off one snapshot of the database, so a
+record it assembles from more than one statement carries one commit
+rather than the checksum of one and the annotations of the next."
+  (when (scholia-db--present-p session-file)
+    (let ((store (scholia-store-open session-file)))
+      (unwind-protect
+          (scholia-store-with-snapshot store
+            (funcall read store))
+        (scholia-store-close store)))))
+
+(defun scholia-db--writing (session-file write)
+  "Call WRITE on a store opened on SESSION-FILE, as one transaction.
+The transaction takes the write lock before WRITE reads anything, so a
+read and the write that follows it are one step no other Emacs commits
+between.  A SESSION-FILE that is not there yet is made at its own path,
+so a second Emacs first-writing it waits on the same lock, and goes
+again when the transaction commits nothing."
+  (let ((store (scholia-store-open session-file)))
+    (unwind-protect
+        (scholia-store-with-transaction store
+          (funcall write store))
+      (scholia-store-close store))))
+
+
 ;;;; Sessions
 
-(defun scholia-db-session-name (db)
-  "Return the name of the session DB belongs to."
-  (plist-get (plist-get db :session) :name))
+(defun scholia-db--publish (store session-file)
+  "Give STORE a session header naming it after SESSION-FILE when it has none.
+A header already there is left alone, so `:created' keeps the moment of
+the first write."
+  (unless (scholia-store-session store)
+    (scholia-store-put-session
+     store (list :name (file-name-base session-file)
+                 :created (format-time-string "%FT%T%z")
+                 :project (funcall scholia-project-root-function)
+                 :description nil))))
 
-(defun scholia-db-session-created (db)
-  "Return when the session DB belongs to was first written."
-  (plist-get (plist-get db :session) :created))
+(defun scholia-db-session-name (session-file)
+  "Return the name of the session stored in SESSION-FILE."
+  (plist-get (scholia-db--reading session-file #'scholia-store-session)
+             :name))
 
-(defun scholia-db-set-session-name (db name)
-  "Return a copy of DB whose session is called NAME.
-DB is left as it stands, so a rename that fails before it writes leaves
-the database it read whole."
-  (scholia-db--with-fields
-   db :session (scholia-db--with-fields (plist-get db :session) :name name)))
+(defun scholia-db-session-created (session-file)
+  "Return when the session stored in SESSION-FILE was first written."
+  (plist-get (scholia-db--reading session-file #'scholia-store-session)
+             :created))
 
-(defun scholia-db--publish-session (db session-file)
-  "Return DB with a session header naming it after SESSION-FILE.
-A header DB already carries is left alone, so `:created' keeps the
-moment of the first write."
-  (if (plist-get db :session)
-      db
-    (scholia-db--with-fields
-     db :session (list :name (file-name-base session-file)
-                       :created (format-time-string "%FT%T%z")
-                       :project (funcall scholia-project-root-function)
-                       :description nil))))
+(defun scholia-db-set-session-name (session-file name)
+  "Call the session stored in SESSION-FILE NAME from now on.
+Only the name is written: the rest of the header, and every record under
+it, is left exactly as it stands.  A SESSION-FILE that is not there yet
+is given a whole header before the name is put on it, since a header
+holding a name alone answers nil to `scholia-db-session-created' for as
+long as that session lasts, and it is listed."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (scholia-db--publish store session-file)
+     (scholia-store-put-session
+      store (scholia-db--with-fields (scholia-store-session store)
+                                     :name name)))))
+
+(defun scholia-db-create-session (session-file)
+  "Give SESSION-FILE a session header when it carries none yet.
+A SESSION-FILE already holding one is left as it stands, so its
+`:created' keeps the moment the session was first made and its records
+stay where they are."
+  (scholia-db--writing
+   session-file
+   (lambda (store) (scholia-db--publish store session-file))))
 
 
 ;;;; Records
@@ -82,32 +147,52 @@ the buffer fingerprints like this\" therefore misleads."
   "Return the annotations RECORD carries."
   (plist-get record :annotations))
 
-(defun scholia-db-files (db)
-  "Return the files DB carries a record for."
-  (mapcar #'scholia-db-record-file (plist-get db :records)))
+(defun scholia-db-files (session-file)
+  "Return the files SESSION-FILE carries a record for."
+  (scholia-db--reading session-file #'scholia-store-files))
 
-(defun scholia-db-record (db file)
-  "Return the record DB carries for FILE, or nil when it carries none."
-  (seq-find (lambda (record)
-              (equal (scholia-db-record-file record) file))
-            (plist-get db :records)))
+(defun scholia-db-record (session-file file)
+  "Return the record SESSION-FILE carries for FILE, or nil when it has none.
+This is the reader the mode-enable path takes, so a session still stored
+as the printed plist is migrated here rather than read as absent."
+  (scholia-db--reading session-file
+                       (lambda (store) (scholia-store-record store file))))
 
-(defun scholia-db--records-without (db file)
-  "Return the records of DB except the one keyed by FILE."
-  (seq-remove (lambda (record)
-                (equal (scholia-db-record-file record) file))
-              (plist-get db :records)))
+(defun scholia-db-store-record (session-file record)
+  "Store RECORD in SESSION-FILE, replacing the record its file keys.
+Every other record is left where it is, so storing one file cannot
+revert what another writer stored for a different one."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (scholia-db--publish store session-file)
+     (scholia-store-put-record store record))))
 
-(defun scholia-db-put-record (db record)
-  "Return DB with RECORD replacing the record for the same file."
-  (scholia-db--with-fields
-   db :records (append (scholia-db--records-without
-                        db (scholia-db-record-file record))
-                       (list record))))
+(defun scholia-db-remove-record (session-file file)
+  "Take the record SESSION-FILE carries for FILE out of it.
+A SESSION-FILE holding no session yet carries no record to take out and
+is left alone rather than made: a removal names no session to create, and
+the one it would create carries no header, which
+`scholia-session-list' cannot see, `scholia-session-create' refuses as
+taken and `scholia-session-switch' opens all at once."
+  (when (scholia-db--present-p session-file)
+    (scholia-db--writing
+     session-file
+     (lambda (store) (scholia-store-remove-record store file)))))
 
-(defun scholia-db-remove-record (db file)
-  "Return DB without its record for FILE."
-  (scholia-db--with-fields db :records (scholia-db--records-without db file)))
+(defun scholia-db-add-reply (session-file file reply)
+  "Append REPLY to the record FILE keys in SESSION-FILE.
+One annotation is added to one record: every other annotation of that
+record, and every other record, is left as it stands.  A reply an agent
+makes into the session Emacs has open therefore cannot be reverted by the
+save Emacs is about to make, nor revert it."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (scholia-db--publish store session-file)
+     (unless (scholia-store-record store file)
+       (scholia-store-put-record store (scholia-db-make-record file nil nil)))
+     (scholia-store-add-annotation store file reply))))
 
 
 ;;;; Annotations
@@ -274,38 +359,41 @@ returned either way."
     sent))
 
 
+;;;; The interchange a session travels as
+
+(defun scholia-db-interchange (session-file)
+  "Return the database SESSION-FILE carries, writing nothing to SESSION-FILE.
+A file still holding the printed plist is read as it stands rather than
+migrated: listing the sessions and importing one both reach files that
+are the caller's rather than the store's, so an exported `.eld' parked in
+the session directory would be turned into a binary database the moment a
+session prompt was opened, and a colleague's export could not be imported
+at all from a directory scholia cannot write to.
+
+A SESSION-FILE holding no session yet carries the empty database rather
+than nothing: handed on to the writer, nothing is written out as the
+literal \"nil\", which is an export reported as made that neither scholia
+nor the colleague it was made for can read back."
+  (if (scholia-store-interchange-p session-file)
+      (scholia-store-read-interchange session-file)
+    (or (scholia-db--reading session-file #'scholia-store-read)
+        (list :scholia scholia-store-format-version :records nil))))
+
+(defun scholia-db-session-file-p (session-file)
+  "Return non-nil when SESSION-FILE carries a session of scholia's.
+SESSION-FILE is left as it stands, so asking this of every file in the
+session directory cannot migrate one that only travels through it.  A
+database answers out of its header row and a printed plist out of the
+whole value, which is the only place its header is."
+  (and (if (scholia-store-interchange-p session-file)
+           (plist-get (plist-get (scholia-store-read-interchange session-file)
+                                 :session)
+                      :name)
+         (scholia-db-session-name session-file))
+       t))
+
+
 ;;;; The I/O entry points
-
-(defun scholia-db--empty ()
-  "Return a database holding no records."
-  (list :scholia scholia-store-format-version :records nil))
-
-(defun scholia-db-load (session-file)
-  "Return the database stored in SESSION-FILE.
-A SESSION-FILE that does not exist reads as an empty database, and so
-does a zero-length one: a write cut short before it reached the rename,
-a kill mid-sync or a partly fetched checkout leave a file holding no
-database to be wrong about, and the next save fills it.  One still
-holding the printed plist scholia stored before is migrated into a
-database at that same path on the way through.  One carrying content
-but no `:scholia' version tag, and one the reader cannot parse, signal
-`scholia-db-format-error' rather than being guessed at."
-  (if (or (not (file-exists-p session-file))
-          (zerop (file-attribute-size (file-attributes session-file))))
-      (scholia-db--empty)
-    (let ((store (scholia-store-open session-file)))
-      (unwind-protect
-          (scholia-store-read store)
-        (scholia-store-close store)))))
-
-(defun scholia-db--write (session-file db)
-  "Write DB into SESSION-FILE.
-The whole database is replaced as one transaction, so a write cut short
-leaves the session that was there before it whole."
-  (let ((store (scholia-store-open session-file)))
-    (unwind-protect
-        (scholia-store-write store db)
-      (scholia-store-close store))))
 
 (defun scholia-db--snapshot (annotation)
   "Return ANNOTATION with its source context taken from the current buffer.
@@ -447,27 +535,27 @@ CHECKSUM is stored again and the record heals.
 A reply in the record being written whose parent is not in it is stamped
 by `scholia-db--stamp-orphans' rather than dropped.  That reaches this
 record and no other, so an orphan arriving through an import is stamped
-by `scholia-session-import' at the seam it merges on rather than waiting
-here for a save of the file it answers.
+by `scholia-db-import' at the seam it merges on rather than waiting here
+for a save of the file it answers.
 
 Reading the record, folding it and writing it back happen as one
-transaction, so a save cut short anywhere leaves the record that was
-stored before it whole rather than half replaced."
-  (let ((store (scholia-store-open session-file)))
-    (unwind-protect
-        (scholia-store-with-transaction store
-          (scholia-db--fold store session-file file annotations checksum
-                            preserve))
-      (scholia-store-close store))))
+transaction, and only the record for FILE is written, so a save cut short
+leaves the record stored before it whole and a save that finishes leaves
+every other record where another writer left it."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (scholia-db--fold store session-file file annotations checksum
+                       preserve))))
 
 (defun scholia-db--fold (store session-file file annotations checksum preserve)
   "Fold ANNOTATIONS of FILE into the record STORE carries for it.
 SESSION-FILE names the session STORE was opened on, CHECKSUM
 fingerprints the buffer and PRESERVE holds the stored annotations the
 caller could not rebuild from it, all as `scholia-db-save' takes them."
-  (let* ((db (scholia-db--publish-session (scholia-store-read store)
-                                          session-file))
-         (stored (scholia-db-record-annotations (scholia-db-record db file)))
+  (scholia-db--publish store session-file)
+  (let* ((record (scholia-store-record store file))
+         (stored (scholia-db-record-annotations record))
          (snapshots (mapcar (lambda (annotation)
                               (scholia-db--carry-forward
                                (scholia-db--snapshot annotation) stored))
@@ -486,36 +574,13 @@ caller could not rebuild from it, all as `scholia-db-save' takes them."
                     (lambda (annotation)
                       (member (scholia-db-annotation-id annotation) carried))
                     preserve)))
-    (scholia-store-put-session store (plist-get db :session))
     (scholia-store-put-record
      store (scholia-db-make-record
             file (scholia-db--stamp-orphans
                   (append placed replies made unplaced))
             (if unplaced
-                (scholia-db-record-checksum (scholia-db-record db file))
+                (scholia-db-record-checksum record)
               checksum)))))
-
-(defun scholia-db-write (session-file db)
-  "Store DB in SESSION-FILE as it stands and return what was written.
-The annotations are written exactly as DB carries them, so unlike
-`scholia-db-save' this takes no source context from the current buffer:
-a database read in one buffer and written from another keeps the
-`:line', `:line-text', `:column' and `:end-column' it was stored with
-\(INV-13).  A DB carrying no session header is given one named after
-SESSION-FILE, and one already carrying a header keeps it."
-  (let ((published (scholia-db--publish-session db session-file)))
-    (scholia-db--write session-file published)
-    published))
-
-(defun scholia-db-create-session (session-file)
-  "Return the database in SESSION-FILE, writing a header when it has none.
-A SESSION-FILE already holding a session is read and returned untouched,
-so its `:created' keeps the moment the session was first made and its
-records are left where they are."
-  (let ((db (scholia-db-load session-file)))
-    (if (scholia-db-session-name db)
-        db
-      (scholia-db-write session-file db))))
 
 
 ;;;; The checksum-drift re-search
@@ -580,10 +645,10 @@ no position and pass through untouched."
         (scholia-db-annotation-set-bounds
          annotation (car bounds) (cdr bounds))))))
 
-(defun scholia-db-buffer-annotations (db file checksum &optional unplaced)
-  "Return the annotations DB carries for FILE, placed in the current buffer.
+(defun scholia-db-buffer-annotations (record checksum &optional unplaced)
+  "Return the annotations RECORD carries, placed in the current buffer.
 CHECKSUM fingerprints the buffer as it is now.  While it matches the one
-stored with the record the buffer is the file the annotations were made
+stored with RECORD the buffer is the file the annotations were made
 against and the stored positions hold.  Once it differs the file drifted
 while scholia was not watching, and every annotation is relocated with
 `scholia-db--relocate'.
@@ -594,21 +659,20 @@ every one.  They keep the `:line' and `:line-text' snapshot locating
 them once the text they covered is gone, so a caller reports them and
 hands them to `scholia-db-save' as its PRESERVE argument instead of
 letting the next save read them as deleted."
-  (let ((record (scholia-db-record db file)))
-    (if (equal (scholia-db-record-checksum record) checksum)
-        (progn
-          (when unplaced (funcall unplaced nil))
-          (scholia-db-record-annotations record))
-      (let* ((stored (scholia-db-record-annotations record))
-             (placed (delq nil (mapcar #'scholia-db--relocate stored)))
-             (ids (mapcar #'scholia-db-annotation-id placed)))
-        (when unplaced
-          (funcall unplaced
-                   (seq-remove
-                    (lambda (annotation)
-                      (member (scholia-db-annotation-id annotation) ids))
-                    stored)))
-        placed))))
+  (if (equal (scholia-db-record-checksum record) checksum)
+      (progn
+        (when unplaced (funcall unplaced nil))
+        (scholia-db-record-annotations record))
+    (let* ((stored (scholia-db-record-annotations record))
+           (placed (delq nil (mapcar #'scholia-db--relocate stored)))
+           (ids (mapcar #'scholia-db-annotation-id placed)))
+      (when unplaced
+        (funcall unplaced
+                 (seq-remove
+                  (lambda (annotation)
+                    (member (scholia-db-annotation-id annotation) ids))
+                  stored)))
+      placed)))
 
 
 ;;;; Merging
@@ -698,31 +762,33 @@ that reads it."
       #'scholia-db-widen-over)
      (scholia-db-record-checksum host))))
 
-(defun scholia-db-stamp-orphans (db)
-  "Return DB with every reply that lost its parent stamped, record by record.
-A merge is the one moment a reply can arrive whose parent nothing holds,
-and the record it lands in may belong to a file no buffer visits, whose
-next save is the only other thing that would stamp it."
-  (scholia-db--with-fields
-   db :records (mapcar (lambda (record)
-                         (scholia-db-make-record
-                          (scholia-db-record-file record)
-                          (scholia-db--stamp-orphans
-                           (scholia-db-record-annotations record))
-                          (scholia-db-record-checksum record)))
-                       (plist-get db :records))))
+(defun scholia-db-import (session-file db)
+  "Merge the database DB into the session stored in SESSION-FILE.
+Record by record: one keyed by a file the session already carries is
+joined into the record stored for it, annotations shared by id counting
+once, and one keyed by a file it does not know lands whole.  A
+SESSION-FILE holding no session yet is given a header named after it, and
+one already holding a session keeps the header it has.
 
-(defun scholia-db-merge (db-a db-b)
-  "Return DB-A holding the records of DB-B as well, joined file by file."
-  (seq-reduce (lambda (db record)
-                (let ((host (scholia-db-record
-                             db (scholia-db-record-file record))))
-                  (scholia-db-put-record
-                   db (if host
+A reply arriving without the annotation it answers is stamped as its
+record lands, since that record may belong to a file no buffer here
+visits and its next save is the only other thing that would reach it."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (scholia-db--publish store session-file)
+     (dolist (record (plist-get db :records))
+       (let* ((file (scholia-db-record-file record))
+              (host (scholia-store-record store file))
+              (joined (if host
                           (scholia-db--merge-records host record)
-                        record))))
-              (plist-get db-b :records)
-              db-a))
+                        record)))
+         (scholia-store-put-record
+          store (scholia-db-make-record
+                 file
+                 (scholia-db--stamp-orphans
+                  (scholia-db-record-annotations joined))
+                 (scholia-db-record-checksum joined))))))))
 
 (provide 'scholia-db)
 ;;; scholia-db.el ends here

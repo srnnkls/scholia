@@ -227,7 +227,7 @@ reported rather than propagated whatever the user has set."
              (sent (scholia-db-send-batch annotations send #'ignore)))
         (scholia-db-save session file sent "checksum-one")
         (let* ((loaded (scholia-db-record-annotations
-                        (scholia-db-record (scholia-db-load session) file)))
+                        (scholia-db-record session file)))
                (gamma (nth 2 loaded))
                (record (cadr (scholia-db-annotation-sends gamma))))
           (should (equal (scholia-send-test--ids loaded)
@@ -248,11 +248,11 @@ reported rather than propagated whatever the user has set."
           (scholia-db-save session file loaded "checksum-two")
           (should (equal (scholia-send-test--send-counts
                           (scholia-db-record-annotations
-                           (scholia-db-record (scholia-db-load session) file)))
+                           (scholia-db-record session file)))
                          '(2 2 2 2)))
           (scholia-db-save session file annotations "checksum-three")
           (let ((merged (scholia-db-record-annotations
-                         (scholia-db-record (scholia-db-load session) file))))
+                         (scholia-db-record session file))))
             (should (equal (scholia-send-test--send-counts merged) '(2 2 2 2)))
             (should (equal (scholia-send-test--targets merged)
                            '("earlier-alpha" "claude-2"

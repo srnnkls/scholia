@@ -37,7 +37,7 @@ its terminator at 37.")
 (defun scholia-core-test--stored (session file)
   "Return the annotations stored for FILE in the session at SESSION."
   (scholia-db-record-annotations
-   (scholia-db-record (scholia-db-load session) file)))
+   (scholia-db-record session file)))
 
 (defun scholia-core-test--texts (annotations)
   "Return the notes ANNOTATIONS carry, sorted."
@@ -243,7 +243,7 @@ its terminator at 37.")
                                  (point-min) (point-max)))))
         (scholia-save-annotations)
         (widen)
-        (let ((record (scholia-db-record (scholia-db-load (scholia-session-file))
+        (let ((record (scholia-db-record (scholia-session-file)
                                          file)))
           (should (equal (scholia-db-record-checksum record) whole))
           (should (equal (scholia-core-test--texts

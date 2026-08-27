@@ -79,7 +79,7 @@ COUNT defaults to the first occurrence."
 (defun scholia-db-test--annotations (session file)
   "Return the annotations stored for FILE in the session at SESSION."
   (scholia-db-record-annotations
-   (scholia-db-record (scholia-db-load session) file)))
+   (scholia-db-record session file)))
 
 
 ;;;; The I/O entry points
@@ -95,13 +95,12 @@ COUNT defaults to the first occurrence."
                                                  (scholia-db-test--bounds "delta"))))
         (scholia-db-save session file (list gamma delta) "checksum-one")
         (should (file-exists-p session))
-        (let* ((db (scholia-db-load session))
-               (record (scholia-db-record db file))
+        (let* ((record (scholia-db-record session file))
                (loaded (scholia-db-record-annotations record))
                (restored (scholia-db-test--with-id "id-gamma" loaded)))
-          (should (equal (scholia-db-files db) (list file)))
-          (should (equal (scholia-db-session-name db) "round-trip"))
-          (should (scholia-db-session-created db))
+          (should (equal (scholia-db-files session) (list file)))
+          (should (equal (scholia-db-session-name session) "round-trip"))
+          (should (scholia-db-session-created session))
           (should (equal (scholia-db-record-file record) file))
           (should (equal (scholia-db-record-checksum record) "checksum-one"))
           (should (equal (scholia-db-test--ids loaded) '("id-delta" "id-gamma")))
@@ -130,16 +129,14 @@ COUNT defaults to the first occurrence."
              (delta (scholia-db-test--annotation "id-delta" "on delta"
                                                  (scholia-db-test--bounds "delta"))))
         (scholia-db-save session file (list gamma) "checksum-one")
-        (let ((published (scholia-db-load session)))
-          (should (scholia-db-session-created published))
+        (let ((published (scholia-db-session-created session)))
+          (should published)
           (scholia-db-save session file (list gamma delta) "checksum-two")
-          (let* ((db (scholia-db-load session))
-                 (record (scholia-db-record db file))
+          (let* ((record (scholia-db-record session file))
                  (loaded (scholia-db-record-annotations record)))
-            (should (equal (scholia-db-files db) (list file)))
-            (should (equal (scholia-db-session-name db) "repeated"))
-            (should (equal (scholia-db-session-created db)
-                           (scholia-db-session-created published)))
+            (should (equal (scholia-db-files session) (list file)))
+            (should (equal (scholia-db-session-name session) "repeated"))
+            (should (equal (scholia-db-session-created session) published))
             (should (equal (length loaded) 2))
             (should (equal (scholia-db-test--ids loaded) '("id-delta" "id-gamma")))
             (should (equal (scholia-db-record-checksum record) "checksum-two")))
@@ -153,13 +150,13 @@ COUNT defaults to the first occurrence."
               (should-error (scholia-db-save session file (list gamma)
                                              "checksum-three"))
               (should called)))
-          (let ((record (scholia-db-record (scholia-db-load session) file)))
+          (let ((record (scholia-db-record session file)))
             (should (equal (scholia-db-test--ids
                             (scholia-db-record-annotations record))
                            '("id-delta" "id-gamma")))
             (should (equal (scholia-db-record-checksum record) "checksum-two"))))))))
 
-(ert-deftest scholia-db-load-refuses-a-session-file-without-a-version-tag ()
+(ert-deftest scholia-db-refuses-a-session-file-without-a-version-tag ()
   (scholia-test-with-session-directory
     (let ((session (scholia-db-test--session-file "untagged")))
       (with-temp-file session
@@ -167,27 +164,32 @@ COUNT defaults to the first occurrence."
                   ((1 5 "note" "alpha" 0 :margin "id-legacy" nil))
                   "checksum"))
                (current-buffer)))
-      (should-error (scholia-db-load session) :type 'scholia-db-format-error)
+      (should-error (scholia-db-files session) :type 'scholia-db-format-error)
       (with-temp-file session
         (prin1 '(:session (:name "untagged" :created nil :project nil :description nil)
                  :records nil)
                (current-buffer)))
-      (should-error (scholia-db-load session) :type 'scholia-db-format-error)
+      (should-error (scholia-db-files session) :type 'scholia-db-format-error)
       (with-temp-file session
         (insert "(:scholia 1 :records ((:file \"x\" :annotations ("))
-      (should-error (scholia-db-load session) :type 'scholia-db-format-error)
+      (should-error (scholia-db-files session) :type 'scholia-db-format-error)
       (with-temp-file session
         (insert "(:scholia 1 :records #1=((:file \"x\") . #1#))"))
-      (should-error (scholia-db-load session) :type 'scholia-db-format-error))))
+      (should-error (scholia-db-files session) :type 'scholia-db-format-error))))
 
-(ert-deftest scholia-db-load-reads-a-zero-length-session-file-as-empty ()
+(ert-deftest scholia-db-reads-an-absent-or-zero-length-session-file-as-empty ()
   (scholia-test-with-session-directory
     (scholia-test-with-temp-file-buffer buffer scholia-db-test--source
       (let ((file (buffer-file-name buffer))
             (session (scholia-db-test--session-file "interrupted")))
+        (should-not (scholia-db-files session))
+        (should-not (scholia-db-record session file))
+        (should-not (scholia-db-session-name session))
+        (should-not (file-exists-p session))
         (write-region "" nil session nil 'silent)
         (should (equal (file-attribute-size (file-attributes session)) 0))
-        (should-not (scholia-db-files (scholia-db-load session)))
+        (should-not (scholia-db-files session))
+        (should-not (scholia-db-record session file))
         (scholia-db-save session file
                          (list (scholia-db-test--annotation
                                 "id-gamma" "on gamma"
@@ -197,8 +199,75 @@ COUNT defaults to the first occurrence."
                         (scholia-db-test--annotations session file))
                        '("id-gamma")))
         (with-temp-file session (insert "()"))
-        (should-error (scholia-db-load session)
+        (should-error (scholia-db-files session)
                       :type 'scholia-db-format-error)))))
+
+(ert-deftest scholia-db-exports-a-session-holding-nothing-yet-as-an-empty-one ()
+  "A session file that is absent or zero length exports as an empty database.
+`scholia-db--reading' answers nothing for both, and handing that on
+wrote the literal \"nil\" into the export: a file
+`scholia-session-export' reported as written that neither scholia nor
+the colleague it was made for can read back."
+  (scholia-test-with-session-directory
+    (let ((absent (scholia-db-test--session-file "never-written"))
+          (empty (scholia-db-test--session-file "cut-short"))
+          (export (scholia-db-test--session-file "cut-short-export")))
+      (write-region "" nil empty nil 'silent)
+      (dolist (session (list absent empty))
+        (scholia-store-write-interchange export
+                                         (scholia-db-interchange session))
+        (let ((written (scholia-store-read-interchange export)))
+          (should (equal (plist-get written :scholia)
+                         scholia-store-format-version))
+          (should-not (plist-get written :records)))))))
+
+(ert-deftest scholia-db-record-comes-back-from-one-snapshot-of-the-session ()
+  "A record read while another Emacs commits is one version or the other.
+The checksum and the annotations are two statements, each taking a
+snapshot of its own, so a commit landing between them handed back the
+old checksum with the new annotations.  `scholia-db-buffer-annotations'
+places the stored positions unchanged while the checksum matches the
+buffer, so a torn record puts annotations against content they were
+never made against and nothing reports it."
+  (scholia-test-with-session-directory
+    (let* ((session (scholia-db-test--session-file "torn"))
+           (file "/nowhere/torn.txt")
+           (before (list :file file
+                         :annotations (list (list :id "id-before"))
+                         :checksum "checksum-before"))
+           (after (list :file file
+                        :annotations (list (list :id "id-after"))
+                        :checksum "checksum-after"))
+           (annotations (symbol-function 'scholia-store-annotations)))
+      (scholia-db-store-record session before)
+      (should (equal (cl-letf (((symbol-function 'scholia-store-annotations)
+                                (lambda (store read-file)
+                                  (scholia-db-store-record session after)
+                                  (funcall annotations store read-file))))
+                       (scholia-db-record session file))
+                     before))
+      (should (equal (scholia-db-record session file) after)))))
+
+(ert-deftest scholia-db-a-write-to-a-session-that-is-absent-mints-no-half-one ()
+  "A write naming no creation makes a whole session or none at all.
+Both entry points reach `scholia-db--writing', which creates the session
+file it is pointed at, and neither published a header.  A removal left a
+headerless database: hidden from `scholia-session-list', refused as
+taken by `scholia-session-create' and accepted by
+`scholia-session-switch' all at once.  A renaming left a header carrying
+a name and nothing else, so `scholia-db-session-created' answered nil
+for that session forever, and that one is listed."
+  (scholia-test-with-session-directory
+    (let ((removed (scholia-db-test--session-file "ghost"))
+          (renamed (scholia-db-test--session-file "half")))
+      (scholia-db-remove-record removed "/nowhere/absent.txt")
+      (should-not (file-exists-p removed))
+      (write-region "" nil removed nil 'silent)
+      (scholia-db-remove-record removed "/nowhere/absent.txt")
+      (should (equal (file-attribute-size (file-attributes removed)) 0))
+      (scholia-db-set-session-name renamed "renamed")
+      (should (equal (scholia-db-session-name renamed) "renamed"))
+      (should (scholia-db-session-created renamed)))))
 
 
 ;;;; The source-context snapshot
@@ -381,31 +450,38 @@ COUNT defaults to the first occurrence."
              (gamma (scholia-db-test--annotation "id-gamma" "on gamma"
                                                  (scholia-db-test--bounds "gamma")))
              (delta (scholia-db-test--annotation "id-delta" "on delta"
-                                                 (scholia-db-test--bounds "delta")))
-             (db nil))
+                                                 (scholia-db-test--bounds "delta"))))
         (write-region scholia-db-test--source nil other nil 'silent)
         (scholia-db-save session file (list gamma) "checksum-one")
-        (setq db (scholia-db-load session))
-        (should (equal (scholia-db-record-file (scholia-db-record db file)) file))
-        (should-not (scholia-db-record db other))
-        (setq db (scholia-db-put-record
-                  db (scholia-db-make-record other (list delta) "checksum-other")))
-        (should (equal (sort (scholia-db-files db) #'string<)
+        (should (equal (scholia-db-record-file (scholia-db-record session file))
+                       file))
+        (should-not (scholia-db-record session other))
+        (scholia-db-store-record
+         session (scholia-db-make-record other (list delta) "checksum-other"))
+        (should (equal (sort (scholia-db-files session) #'string<)
                        (sort (list file other) #'string<)))
         (should (equal (scholia-db-test--ids
-                        (scholia-db-record-annotations (scholia-db-record db other)))
+                        (scholia-db-record-annotations
+                         (scholia-db-record session other)))
                        '("id-delta")))
-        (setq db (scholia-db-put-record
-                  db (scholia-db-make-record other (list gamma delta) "checksum-again")))
-        (should (equal (length (scholia-db-files db)) 2))
+        (scholia-db-store-record
+         session
+         (scholia-db-make-record other (list gamma delta) "checksum-again"))
+        (should (equal (length (scholia-db-files session)) 2))
         (should (equal (scholia-db-test--ids
-                        (scholia-db-record-annotations (scholia-db-record db other)))
+                        (scholia-db-record-annotations
+                         (scholia-db-record session other)))
                        '("id-delta" "id-gamma")))
-        (should (equal (scholia-db-record-checksum (scholia-db-record db other))
+        (should (equal (scholia-db-record-checksum
+                        (scholia-db-record session other))
                        "checksum-again"))
-        (setq db (scholia-db-remove-record db file))
-        (should (equal (scholia-db-files db) (list other)))
-        (should-not (scholia-db-record db file))))))
+        (should (equal (scholia-db-test--ids
+                        (scholia-db-record-annotations
+                         (scholia-db-record session file)))
+                       '("id-gamma")))
+        (scholia-db-remove-record session file)
+        (should (equal (scholia-db-files session) (list other)))
+        (should-not (scholia-db-record session file))))))
 
 (ert-deftest scholia-db-annotation-accessors-and-keyed-mutators-survive-a-round-trip ()
   (scholia-test-with-session-directory
@@ -465,10 +541,10 @@ COUNT defaults to the first occurrence."
              (beta-beg (car (scholia-db-test--bounds "beta")))
              (beta (scholia-db-test--annotation "id-beta" "on beta"
                                                 (scholia-db-test--bounds "beta")))
-             (db nil))
+             (record nil))
         (scholia-db-save session file (list gamma beta) "checksum-one")
-        (setq db (scholia-db-load session))
-        (let* ((kept (scholia-db-buffer-annotations db file "checksum-one"))
+        (setq record (scholia-db-record session file))
+        (let* ((kept (scholia-db-buffer-annotations record "checksum-one"))
                (unmoved (scholia-db-test--with-id "id-gamma" kept)))
           (should (equal (scholia-db-test--ids kept) '("id-beta" "id-gamma")))
           (should (equal (scholia-db-annotation-beg unmoved) gamma-beg)))
@@ -487,7 +563,7 @@ COUNT defaults to the first occurrence."
                      scholia-search-region-lines-delta)))
         (let* ((unplaced nil)
                (relocated (scholia-db-buffer-annotations
-                           db file "checksum-two"
+                           record "checksum-two"
                            (lambda (dropped) (setq unplaced dropped))))
                (moved (car relocated)))
           (should (equal (scholia-db-test--ids relocated) '("id-gamma")))
@@ -509,17 +585,17 @@ COUNT defaults to the first occurrence."
             (should (equal (scholia-db-annotation-annotated-text kept)
                            "beta"))
             (should (equal (scholia-db-record-checksum
-                            (scholia-db-record (scholia-db-load session) file))
+                            (scholia-db-record session file))
                            "checksum-one"))
             (let* ((still nil)
                    (reopened (scholia-db-buffer-annotations
-                              (scholia-db-load session) file "checksum-two"
+                              (scholia-db-record session file) "checksum-two"
                               (lambda (dropped) (setq still dropped)))))
               (should (equal (scholia-db-test--ids reopened) '("id-gamma")))
               (should (equal (scholia-db-test--ids still) '("id-beta")))
               (scholia-db-save session file reopened "checksum-two")
               (should (equal (scholia-db-record-checksum
-                              (scholia-db-record (scholia-db-load session)
+                              (scholia-db-record session
                                                  file))
                              "checksum-two")))))))))
 
@@ -535,7 +611,7 @@ COUNT defaults to the first occurrence."
           (goto-char (point-min))
           (insert "xx "))
         (let ((relocated (scholia-db-buffer-annotations
-                          (scholia-db-load session) file "checksum-two")))
+                          (scholia-db-record session file) "checksum-two")))
           (should (equal (scholia-db-test--ids relocated) '("id-gamma")))
           (scholia-db-save session file relocated "checksum-two")
           (should (equal (scholia-db-test--ids (scholia-db-test--annotations session file))
@@ -552,13 +628,13 @@ COUNT defaults to the first occurrence."
              (first (scholia-db-test--annotation "id-first" "on the first" first-bounds))
              (second (scholia-db-test--annotation "id-second" "on the second"
                                                   second-bounds))
-             (db nil))
+             (record nil))
         (scholia-db-save session file (list first second) "checksum-one")
-        (setq db (scholia-db-load session))
+        (setq record (scholia-db-record session file))
         (save-excursion
           (goto-char (point-max))
           (insert "an unrelated trailing line\n"))
-        (let ((relocated (scholia-db-buffer-annotations db file "checksum-two")))
+        (let ((relocated (scholia-db-buffer-annotations record "checksum-two")))
           (should (equal (scholia-db-test--ids relocated) '("id-first" "id-second")))
           (should (equal (scholia-db-annotation-interval
                           (scholia-db-test--with-id "id-first" relocated))
@@ -576,7 +652,7 @@ COUNT defaults to the first occurrence."
         (should (equal scholia-search-region-lines-delta 2))
         (scholia-db-save session file (list spanning) "checksum-one")
         (let ((relocated (scholia-db-buffer-annotations
-                          (scholia-db-load session) file "checksum-two")))
+                          (scholia-db-record session file) "checksum-two")))
           (should (equal (scholia-db-test--ids relocated) '("id-span")))
           (should (equal (scholia-db-annotation-interval (car relocated)) span)))))
     (scholia-test-with-temp-file-buffer buffer "one\ntwo\nedge\ntarget\nfive\n"
@@ -593,7 +669,7 @@ COUNT defaults to the first occurrence."
                       (point-min) (point-min))))
         (scholia-db-save session file (list edge beyond) "checksum-one")
         (let ((relocated (scholia-db-buffer-annotations
-                          (scholia-db-load session) file "checksum-two")))
+                          (scholia-db-record session file) "checksum-two")))
           (should (equal (scholia-db-test--ids relocated) '("id-edge")))
           (should (equal (scholia-db-annotation-interval (car relocated))
                          edge-bounds)))))))
@@ -634,66 +710,71 @@ COUNT defaults to the first occurrence."
                              #'string<)
                        '("alpha beta gamma" "delta")))))))
 
-(ert-deftest scholia-db-merge-joins-two-sessions-per-file ()
+(ert-deftest scholia-db-import-joins-an-incoming-database-into-the-rows-per-file ()
   (scholia-test-with-session-directory
     (scholia-test-with-temp-file-buffer buffer scholia-db-test--source
       (let* ((file (buffer-file-name buffer))
-             (session-a (scholia-db-test--session-file "import-a"))
-             (session-b (scholia-db-test--session-file "import-b"))
+             (other "/nowhere/only-outside.txt")
+             (session (scholia-db-test--session-file "import-target"))
              (gamma (scholia-db-test--annotation "id-gamma" "on gamma"
                                                  (scholia-db-test--bounds "gamma")))
              (delta (scholia-db-test--annotation "id-delta" "on delta"
-                                                 (scholia-db-test--bounds "delta"))))
-        (scholia-db-save session-a file (list gamma) "checksum-a")
-        (scholia-db-save session-b file (list delta) "checksum-b")
-        (scholia-test-with-temp-file-buffer other-buffer scholia-db-test--source
-          (let ((other (buffer-file-name other-buffer)))
-            (scholia-db-save session-b other
-                             (list (scholia-db-test--annotation
-                                    "id-other" "on beta"
-                                    (scholia-db-test--bounds "beta")))
-                             "checksum-other")
-            (let ((merged (scholia-db-merge (scholia-db-load session-a)
-                                            (scholia-db-load session-b))))
-              (should (equal (sort (scholia-db-files merged) #'string<)
-                             (sort (list file other) #'string<)))
-              (should (equal (scholia-db-test--ids
-                              (scholia-db-record-annotations
-                               (scholia-db-record merged file)))
-                             '("id-delta" "id-gamma")))
-              (should (equal (scholia-db-test--ids
-                              (scholia-db-record-annotations
-                               (scholia-db-record merged other)))
-                             '("id-other"))))))))))
+                                                 (scholia-db-test--bounds "delta")))
+             (incoming
+              (list :scholia scholia-store-format-version
+                    :records
+                    (list (scholia-db-make-record file (list delta) "checksum-b")
+                          (scholia-db-make-record
+                           other
+                           (list (scholia-db-test--annotation
+                                  "id-other" "on beta"
+                                  (scholia-db-test--bounds "beta")))
+                           "checksum-other")))))
+        (scholia-db-save session file (list gamma) "checksum-a")
+        (scholia-db-import session incoming)
+        (should (equal (sort (scholia-db-files session) #'string<)
+                       (sort (list file other) #'string<)))
+        (should (equal (scholia-db-test--ids
+                        (scholia-db-record-annotations
+                         (scholia-db-record session file)))
+                       '("id-delta" "id-gamma")))
+        (should (equal (scholia-db-test--ids
+                        (scholia-db-record-annotations
+                         (scholia-db-record session other)))
+                       '("id-other")))
+        (should (equal (scholia-db-session-name session) "import-target"))))))
 
-(ert-deftest scholia-db-merge-folds-an-overlapping-guest-into-the-host ()
-  (let* ((file "/nowhere/shared.txt")
-         (host (scholia-db-make-annotation "id-host" "host note" 5 10 "hello"))
-         (guest (scholia-db-make-annotation "id-guest" "guest note" 5 12
-                                            "hello wor"))
-         (reply (scholia-db-make-annotation "id-reply" "under the guest"
-                                            nil nil nil nil nil "id-guest"))
-         (elsewhere (scholia-db-make-annotation "id-far" "far note" 40 44
-                                                "away"))
-         (merged (scholia-db-merge
-                  (scholia-db-put-record
-                   (list :scholia 1 :records nil)
-                   (scholia-db-make-record file (list host) "host-sum"))
-                  (scholia-db-put-record
-                   (list :scholia 1 :records nil)
-                   (scholia-db-make-record file (list guest reply elsewhere)
-                                           "guest-sum"))))
-         (stored (scholia-db-record-annotations (scholia-db-record merged file)))
-         (folded (scholia-db-test--with-id "id-host" stored)))
-    (should (equal (scholia-db-test--ids stored)
-                   '("id-far" "id-host" "id-reply")))
-    (should (equal (scholia-db-annotation-interval folded) '(5 . 12)))
-    (should (string-match-p "host note" (scholia-db-annotation-text folded)))
-    (should (string-match-p "guest note" (scholia-db-annotation-text folded)))
-    (should (equal (scholia-db-annotation-annotated-text folded) "hello"))
-    (should (equal (scholia-db-annotation-interval
-                    (scholia-db-test--with-id "id-far" stored))
-                   '(40 . 44)))))
+(ert-deftest scholia-db-import-folds-an-overlapping-guest-into-the-stored-host ()
+  (scholia-test-with-session-directory
+    (let* ((file "/nowhere/shared.txt")
+           (session (scholia-db-test--session-file "folding"))
+           (host (scholia-db-make-annotation "id-host" "host note" 5 10 "hello"))
+           (guest (scholia-db-make-annotation "id-guest" "guest note" 5 12
+                                              "hello wor"))
+           (reply (scholia-db-make-annotation "id-reply" "under the guest"
+                                              nil nil nil nil nil "id-guest"))
+           (elsewhere (scholia-db-make-annotation "id-far" "far note" 40 44
+                                                  "away")))
+      (scholia-db-create-session session)
+      (scholia-db-store-record
+       session (scholia-db-make-record file (list host) "host-sum"))
+      (scholia-db-import
+       session
+       (list :scholia scholia-store-format-version
+             :records (list (scholia-db-make-record
+                             file (list guest reply elsewhere) "guest-sum"))))
+      (let* ((stored (scholia-db-record-annotations
+                      (scholia-db-record session file)))
+             (folded (scholia-db-test--with-id "id-host" stored)))
+        (should (equal (scholia-db-test--ids stored)
+                       '("id-far" "id-host" "id-reply")))
+        (should (equal (scholia-db-annotation-interval folded) '(5 . 12)))
+        (should (string-match-p "host note" (scholia-db-annotation-text folded)))
+        (should (string-match-p "guest note" (scholia-db-annotation-text folded)))
+        (should (equal (scholia-db-annotation-annotated-text folded) "hello"))
+        (should (equal (scholia-db-annotation-interval
+                        (scholia-db-test--with-id "id-far" stored))
+                       '(40 . 44)))))))
 
 (provide 'scholia-db-test)
 ;;; scholia-db-test.el ends here

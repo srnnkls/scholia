@@ -7,8 +7,8 @@
 ;;; Commentary:
 
 ;; Covers `scholia-session', the named session store, and the three public
-;; entry points `scholia-db' grows for it: a whole-database writer that
-;; persists what it is handed, a session-file constructor, and a header name
+;; entry points `scholia-db' grows for it: a row writer that persists the
+;; record it is handed, a session-file constructor, and a header name
 ;; setter.  Persisted state is read back through the db API rather than
 ;; through the stored representation (INV-12).
 
@@ -131,15 +131,28 @@ against the current buffer is visible in the values that come back."
   "Store ANNOTATIONS as the record FILE keys in the session called NAME."
   (let ((session-file (scholia-session-file name)))
     (scholia-db-create-session session-file)
-    (scholia-db-write session-file
-                      (scholia-db-put-record
-                       (scholia-db-load session-file)
-                       (scholia-db-make-record file annotations "seeded")))))
+    (scholia-db-store-record
+     session-file (scholia-db-make-record file annotations "seeded"))))
 
 (defun scholia-session-test--stored (name file)
   "Return the annotations the session called NAME carries for FILE."
   (scholia-db-record-annotations
-   (scholia-db-record (scholia-db-load (scholia-session-file name)) file)))
+   (scholia-db-record (scholia-session-file name) file)))
+
+(defun scholia-session-test--stamp-created (session-file moment)
+  "Set SESSION-FILE's header `:created' to MOMENT, leaving the rest alone.
+`:created' is written by `format-time-string' at one-second resolution, so
+a header minted fresh during a test compares `equal' to the one the test
+started with.  A value from outside the run is what tells a header that
+survived from one that was rebuilt underneath the assertion."
+  (let ((store (scholia-store-open session-file)))
+    (unwind-protect
+        (scholia-store-with-transaction store
+          (scholia-store-put-session
+           store
+           (plist-put (plist-get (scholia-store-read store) :session)
+                      :created moment)))
+      (scholia-store-close store))))
 
 (defun scholia-session-test--journals ()
   "Return the WAL and shared-memory files left in the session directory."
@@ -161,22 +174,19 @@ against the current buffer is visible in the values that come back."
 
 ;;;; What scholia-db grows for the session store
 
-(ert-deftest scholia-session-db-write-stores-the-database-it-is-handed ()
+(ert-deftest scholia-session-db-stores-the-record-it-is-handed ()
   (scholia-session-test--with-state
     (scholia-test-with-temp-file-buffer _buffer scholia-session-test--source
       (let ((file "/nowhere/that/exists/gone.txt")
             (session-file (scholia-session-file "kept")))
         (scholia-db-create-session session-file)
-        (scholia-db-write
+        (scholia-db-store-record
          session-file
-         (scholia-db-put-record
-          (scholia-db-load session-file)
-          (scholia-db-make-record
-           file
-           (list (scholia-session-test--annotation "one" "held as it was"))
-           "the stored checksum")))
-        (let* ((db (scholia-db-load session-file))
-               (record (scholia-db-record db file))
+         (scholia-db-make-record
+          file
+          (list (scholia-session-test--annotation "one" "held as it was"))
+          "the stored checksum"))
+        (let* ((record (scholia-db-record session-file file))
                (stored (car (scholia-db-record-annotations record))))
           (should (equal (scholia-db-annotation-line stored) 42))
           (should (equal (scholia-db-annotation-line-text stored)
@@ -185,43 +195,48 @@ against the current buffer is visible in the values that come back."
           (should (equal (scholia-db-annotation-end-column stored) 12))
           (should (equal (scholia-db-record-checksum record)
                          "the stored checksum"))
-          (should (equal (scholia-db-session-name db) "kept")))
-        (scholia-db-write (scholia-session-file "orphan")
-                          (scholia-db-put-record
-                           (list :scholia 1 :records nil)
-                           (scholia-db-make-record file nil "none")))
+          (should (equal (scholia-db-session-name session-file) "kept")))
+        (scholia-db-store-record (scholia-session-file "orphan")
+                                 (scholia-db-make-record file nil "none"))
         (should (equal (scholia-db-session-name
-                        (scholia-db-load (scholia-session-file "orphan")))
+                        (scholia-session-file "orphan"))
                        "orphan"))))))
 
 (ert-deftest scholia-session-db-mints-and-renames-a-session-header ()
+  "Creating twice keeps the first moment, and renaming changes only the name.
+`:created' is stamped from outside the run rather than read back and
+compared, because the timestamp has one-second resolution and this test
+takes tens of milliseconds: a header rebuilt wholesale mid-test carries a
+string `equal' to the one it replaced, so comparing a header to itself
+admits the writer it exists to refuse."
   (scholia-session-test--with-state
-    (let ((session-file (scholia-session-file "fresh")))
+    (let ((session-file (scholia-session-file "fresh"))
+          (born "2020-01-01T00:00:00+0000"))
       (scholia-db-create-session session-file)
       (should (file-exists-p session-file))
-      (let ((db (scholia-db-load session-file)))
-        (should (equal (scholia-db-session-name db) "fresh"))
-        (should (stringp (scholia-db-session-created db)))
-        (should-not (scholia-db-files db)))
-      (let ((created (scholia-db-session-created
-                      (scholia-db-load session-file))))
-        (scholia-session-test--seed
-         "fresh" "/nowhere/kept.txt"
-         (list (scholia-session-test--annotation "one" "already stored")))
-        (scholia-db-create-session session-file)
+      (should (equal (scholia-db-session-name session-file) "fresh"))
+      (should (stringp (scholia-db-session-created session-file)))
+      (should-not (scholia-db-files session-file))
+      (scholia-session-test--stamp-created session-file born)
+      (scholia-session-test--seed
+       "fresh" "/nowhere/kept.txt"
+       (list (scholia-session-test--annotation "one" "already stored")))
+      (scholia-db-create-session session-file)
+      (should (equal (scholia-session-test--texts
+                      (scholia-session-test--stored "fresh"
+                                                    "/nowhere/kept.txt"))
+                     '("already stored")))
+      (should (equal (scholia-db-session-created session-file) born))
+      (let ((files (scholia-db-files session-file)))
+        (should (equal (scholia-db-session-name session-file) "fresh"))
+        (scholia-db-set-session-name session-file "other")
+        (should (equal (scholia-db-session-name session-file) "other"))
+        (should (equal (scholia-db-session-created session-file) born))
+        (should (equal (scholia-db-files session-file) files))
         (should (equal (scholia-session-test--texts
                         (scholia-session-test--stored "fresh"
                                                       "/nowhere/kept.txt"))
-                       '("already stored")))
-        (should (equal (scholia-db-session-created (scholia-db-load session-file))
-                       created)))
-      (let* ((db (scholia-db-load session-file))
-             (renamed (scholia-db-set-session-name db "other")))
-        (should (equal (scholia-db-session-name renamed) "other"))
-        (should (equal (scholia-db-session-name db) "fresh"))
-        (should (equal (scholia-db-session-created renamed)
-                       (scholia-db-session-created db)))
-        (should (equal (scholia-db-files renamed) (scholia-db-files db)))))))
+                       '("already stored")))))))
 
 
 ;;;; Resolution
@@ -299,9 +314,9 @@ every save and every load, since `scholia-session-file' resolves each time."
     (with-temp-buffer
       (scholia-session-create "notes")
       (should (file-exists-p (scholia-session-file "notes")))
-      (let ((db (scholia-db-load (scholia-session-file "notes"))))
-        (should (equal (scholia-db-session-name db) "notes"))
-        (should-not (scholia-db-files db)))
+      (should (equal (scholia-db-session-name (scholia-session-file "notes"))
+                     "notes"))
+      (should-not (scholia-db-files (scholia-session-file "notes")))
       (should (equal (default-value 'scholia-session) "global"))
       (should (equal (scholia-session-name) "global"))
       (should (member "notes" (scholia-session-list)))
@@ -419,7 +434,7 @@ and its next save mints the old name afresh."
         (should (file-exists-p (scholia-session-file "omega")))
         (should-not (file-exists-p (scholia-session-file "alpha")))
         (should (equal (scholia-db-session-name
-                        (scholia-db-load (scholia-session-file "omega")))
+                        (scholia-session-file "omega"))
                        "omega"))
         (should (equal (scholia-session-test--texts
                         (scholia-session-test--stored "omega" "/nowhere/kept.txt"))
@@ -433,7 +448,7 @@ and its next save mints the old name afresh."
                         (scholia-session-test--stored "omega" "/nowhere/kept.txt"))
                        '("carried across")))
         (should-not (scholia-db-files
-                     (scholia-db-load (scholia-session-file "taken"))))
+                     (scholia-session-file "taken")))
         (should (equal (default-value 'scholia-session) "omega"))
         (should (equal scholia-session "omega")))
       (with-current-buffer elsewhere
@@ -522,15 +537,13 @@ and its next save mints the old name afresh."
       (unwind-protect
           (progn
             (scholia-db-create-session outside)
-            (scholia-db-write
+            (scholia-db-store-record
              outside
-             (scholia-db-put-record
-              (scholia-db-load outside)
-              (scholia-db-make-record
-               "/nowhere/shared.txt"
-               (list (scholia-session-test--annotation "two" "from outside"
-                                                       7 11))
-               "seeded")))
+             (scholia-db-make-record
+              "/nowhere/shared.txt"
+              (list (scholia-session-test--annotation "two" "from outside"
+                                                      7 11))
+              "seeded"))
             (scholia-session-test--seed
              "target" "/nowhere/shared.txt"
              (list (scholia-session-test--annotation "one" "already here")))
@@ -540,7 +553,7 @@ and its next save mints the old name afresh."
                                                           "/nowhere/shared.txt"))
                            '("already here" "from outside")))
             (should (equal (scholia-db-session-name
-                            (scholia-db-load (scholia-session-file "target")))
+                            (scholia-session-file "target"))
                            "target"))
             (scholia-session-import outside "brought-in")
             (should (equal (scholia-session-test--texts
@@ -548,7 +561,7 @@ and its next save mints the old name afresh."
                                                           "/nowhere/shared.txt"))
                            '("from outside")))
             (should (equal (scholia-db-session-name
-                            (scholia-db-load (scholia-session-file "brought-in")))
+                            (scholia-session-file "brought-in"))
                            "brought-in"))
             (should-error (scholia-session-import nonsense "refused")
                           :type 'scholia-db-format-error)
@@ -562,16 +575,14 @@ and its next save mints the old name afresh."
       (unwind-protect
           (progn
             (scholia-db-create-session outside)
-            (scholia-db-write
+            (scholia-db-store-record
              outside
-             (scholia-db-put-record
-              (scholia-db-load outside)
-              (scholia-db-make-record
-               "/nowhere/stray.txt"
-               (list (scholia-session-test--annotation "kept" "a root")
-                     (scholia-db-make-annotation "stray" "answers nothing"
-                                                 nil nil nil nil nil "gone"))
-               "seeded")))
+             (scholia-db-make-record
+              "/nowhere/stray.txt"
+              (list (scholia-session-test--annotation "kept" "a root")
+                    (scholia-db-make-annotation "stray" "answers nothing"
+                                                nil nil nil nil nil "gone"))
+              "seeded"))
             (scholia-session-import outside "imported")
             (let* ((stored (scholia-session-test--stored "imported"
                                                          "/nowhere/stray.txt"))
@@ -615,11 +626,11 @@ carries the printed `:scholia' tag rather than the stored bytes."
                            (scholia-session-test--stored
                             "source" "/nowhere/shared.txt")))
             (should (equal (scholia-db-files
-                            (scholia-db-load (scholia-session-file "copy")))
+                            (scholia-session-file "copy"))
                            (scholia-db-files
-                            (scholia-db-load (scholia-session-file "source")))))
+                            (scholia-session-file "source"))))
             (should (equal (scholia-db-session-name
-                            (scholia-db-load (scholia-session-file "copy")))
+                            (scholia-session-file "copy"))
                            "copy")))
         (delete-file exported)))))
 
@@ -690,7 +701,7 @@ comes back holding the deleted session's annotations verbatim."
     (should-not (scholia-session-test--journals))
     (scholia-session-create "notes")
     (should-not (scholia-db-files
-                 (scholia-db-load (scholia-session-file "notes"))))
+                 (scholia-session-file "notes")))
     (should-not (scholia-session-test--stored "notes" "/nowhere/kept.txt"))
     (scholia-session-test--seed
      "notes" "/nowhere/kept.txt"
