@@ -136,6 +136,51 @@ first character of the source line above the carets."
               (split-string (string-trim-right output "\n+") "\n")))
 
 
+;;;; Sessions on disk
+
+(defmacro scholia-export-test--with-directory (var &rest body)
+  "Evaluate BODY with VAR bound to a fresh directory, deleted afterwards.
+Source files a session export reads live there, so nothing the export
+touches is a file the user keeps."
+  (declare (indent 1) (debug (symbolp body)))
+  `(let ((,var (file-name-as-directory (make-temp-file "scholia-source-" t))))
+     (unwind-protect
+         (progn ,@body)
+       (when (file-directory-p ,var)
+         (delete-directory ,var t)))))
+
+(defun scholia-export-test--write (directory name content)
+  "Write CONTENT into NAME under DIRECTORY and return the file name."
+  (let ((file (expand-file-name name directory)))
+    (with-temp-file file (insert content))
+    file))
+
+(defun scholia-export-test--checksum (content)
+  "Return the fingerprint a buffer holding CONTENT answers with."
+  (with-temp-buffer
+    (insert content)
+    (scholia-buffer-checksum)))
+
+(defun scholia-export-test--record (file id text content)
+  "Return the record for FILE, annotated ID carrying TEXT, taken over CONTENT."
+  (scholia-db-make-record file
+                          (list (scholia-export-test--annotation id text))
+                          (scholia-export-test--checksum content)))
+
+(defun scholia-export-test--session (name &rest records)
+  "Create the session NAME carrying RECORDS and return its file."
+  (let ((session (scholia-session-file name)))
+    (scholia-db-create-session session)
+    (dolist (record records)
+      (scholia-db-store-record session record))
+    session))
+
+(defun scholia-export-test--diagnostic (file output)
+  "Return the diagnostic of OUTPUT naming FILE, its `-->' gutter stripped."
+  (seq-find (lambda (block) (string-prefix-p file block))
+            (split-string output " --> ")))
+
+
 ;;;; The rustc format
 
 (ert-deftest scholia-export-rustc-renders-a-diagnostic-carrying-the-id ()
@@ -393,6 +438,294 @@ something that is not the session at all and comes back empty."
         (should (equal (scholia-export-test--count "from the agent" output) 1))
         (should (equal (scholia-export-test--count "check this" output) 1))
         (should (equal (scholia-export-test--count "-->" output) 1))))))
+
+;;;; Session-scoped export
+
+
+(ert-deftest scholia-export-session-renders-live-first-three-ways ()
+  "A session export prefers the file on disk and says when it could not.
+Every annotation carries the same snapshot, which disagrees with the
+fixture on disk, so a diagnostic quoting \"int gamma = delta;\" read the
+snapshot and one quoting \"    gamma delta\" read the file.  The drifted
+file repeats the annotated text in the line prepended to it, so a plain
+scan lands on line one where SCH-004's windowed nearest-match keeps the
+diagnostic on line three.  The merged file carries what
+`scholia-db-widen-over' leaves behind, a matching checksum over an
+`:annotated-text' shorter than the interval, so relocating without
+reading the checksum shrinks the caret run to the shorter match.  The
+file the annotated text was cut from is readable, mismatched and has
+nowhere to relocate to, and the deleted file is not readable at all, so
+a missing source degrades its own diagnostic and leaves the rest alone."
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let* ((present (scholia-export-test--write
+                       directory "present.txt" scholia-export-test--source))
+             (drifted (scholia-export-test--write
+                       directory "drifted.txt"
+                       (concat "# delta notes\n" scholia-export-test--source)))
+             (merged (scholia-export-test--write
+                      directory "merged.txt" scholia-export-test--source))
+             (cut (scholia-export-test--write
+                   directory "cut.txt"
+                   "alpha live\n    gamma\nepsilon zeta\n"))
+             (gone (expand-file-name "gone.txt" directory))
+             (source scholia-export-test--source)
+             (relocated (list :id "id-f"
+                              :text "live note"
+                              :beg 1 :end 6
+                              :annotated-text "alpha"
+                              :line 1 :line-text "alpha beta" :column 0 :end-column 5
+                              :color 0
+                              :position :margin
+                              :reply-to nil
+                              :sends nil))
+             (widened (scholia-db-annotation-set-bounds
+                       (scholia-export-test--annotation "id-d" "widened note")
+                       16 27)))
+        (scholia-export-test--session
+         "live"
+         (scholia-export-test--record present "id-a" "check this" source)
+         (scholia-export-test--record drifted "id-b" "moved note" source)
+         (scholia-export-test--record gone "id-c" "lost note" source)
+         (scholia-db-make-record merged (list widened)
+                                 (scholia-export-test--checksum source))
+         (scholia-db-make-record
+          cut
+          (list relocated (scholia-export-test--annotation "id-e" "cut note"))
+          (scholia-export-test--checksum source)))
+        (let* ((output (scholia-export-session "live"))
+               (integrated (scholia-export-session "live" nil 'integrate))
+               (fresh (scholia-export-test--diagnostic present output))
+               (moved (scholia-export-test--diagnostic drifted output))
+               (wide (scholia-export-test--diagnostic merged output))
+               (lost (scholia-export-test--diagnostic gone output)))
+          (should fresh)
+          (should moved)
+          (should wide)
+          (should lost)
+          (should (string-prefix-p (concat present ":2:11 [id-a]") fresh))
+          (should (string-match-p "\n2 |     gamma delta\n" fresh))
+          (should-not (string-match-p "int gamma = delta;" fresh))
+          (should (equal (scholia-export-test--caret-column fresh) 10))
+          (should-not (string-match-p "stale" fresh))
+          (should (string-prefix-p (concat drifted ":3:11 [id-b]") moved))
+          (should (string-match-p "\n3 |     gamma delta\n" moved))
+          (should-not (string-match-p "int gamma = delta;" moved))
+          (should-not (string-match-p "stale" moved))
+          (should (string-prefix-p (concat merged ":2:5 [id-d]") wide))
+          (should (equal (scholia-export-test--count "^" wide)
+                         (- (scholia-db-annotation-end widened)
+                            (scholia-db-annotation-beg widened))))
+          (should-not (string-match-p "stale" wide))
+          (should (string-match-p
+                   (concat (regexp-quote cut) ":1:1 " (regexp-quote "[id-f]")
+                           "\n  |\n1 | alpha live\n")
+                   output))
+          (should-not (string-match-p
+                       (concat (regexp-quote cut) ":1:1 " (regexp-quote "[id-f]")
+                               "\n.*\n.*\n.*stale")
+                       output))
+          (should (string-match-p
+                   (concat (regexp-quote cut) ":2:13 " (regexp-quote "[id-e]")
+                           "\n  |\n2 | int gamma = delta;\n")
+                   output))
+          (should (string-match-p
+                   (concat (regexp-quote cut) ":2:13 " (regexp-quote "[id-e]")
+                           "\n.*\n.*\n.*stale")
+                   output))
+          (should (string-prefix-p (concat gone ":2:13 [id-c]") lost))
+          (should (string-match-p "\n2 | int gamma = delta;\n" lost))
+          (should (string-match-p "stale" lost))
+          (should (string-match-p
+                   (regexp-quote "alpha live\n#~~~~~\n#[id-f]\n#live note")
+                   integrated))
+          (should (string-match-p
+                   (regexp-quote
+                    "int gamma = delta;\n           #~~~~~\n           #[id-e]\n           #cut note (stale)")
+                   integrated)))))))
+
+(ert-deftest scholia-export-session-reads-the-file-not-the-buffer-visiting-it ()
+  "The rendering carries the text on disk while a buffer holds edits on top.
+`find-file-noselect' would hand back the visiting buffer, so an export
+built on it emits an unsaved edit as though it were the file and
+fingerprints a state nobody else can see."
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer scholia-export-test--source
+      (let ((file (buffer-file-name buffer)))
+        (scholia-export-test--session
+         "unsaved"
+         (scholia-export-test--record file "id-a" "check this"
+                                      scholia-export-test--source))
+        (goto-char (point-min))
+        (should (search-forward "gamma" nil t))
+        (replace-match "sigma")
+        (should (buffer-modified-p buffer))
+        (let ((output (scholia-export-session "unsaved")))
+          (should (string-match-p (concat (regexp-quote file) ":2:11 ") output))
+          (should (string-match-p "\n2 |     gamma delta\n" output))
+          (should-not (string-match-p "sigma" output))
+          (should-not (string-match-p "stale" output))
+          (should (buffer-modified-p buffer)))))))
+
+(ert-deftest scholia-export-session-nests-replies-under-the-parent ()
+  "A reply holds no position, so it renders inside its parent or nowhere.
+The file drifted, so the replies travel the relocating path with their
+parent.  Nothing about a reply is there to recompute from disk, which is
+where one gets dropped or handed a diagnostic of its own."
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let ((file (scholia-export-test--write
+                   directory "source.txt"
+                   (concat "# header\n" scholia-export-test--source))))
+        (scholia-export-test--session
+         "threaded"
+         (scholia-db-make-record
+          file
+          (list (scholia-export-test--annotation "id-a" "check this")
+                (scholia-export-test--reply "id-b" "first reply" "id-a")
+                (scholia-export-test--reply "id-c" "second reply" "id-a"))
+          (scholia-export-test--checksum scholia-export-test--source)))
+        (let ((output (scholia-export-session "threaded")))
+          (should (equal (scholia-export-test--count "-->" output) 1))
+          (should (string-match-p (concat (regexp-quote file) ":3:11 ") output))
+          (should (equal (length (scholia-export-test--caret-lines output)) 1))
+          (should (equal (scholia-export-test--count "first reply" output) 1))
+          (should (equal (scholia-export-test--count "second reply" output) 1))
+          (should (< (scholia-export-test--column "check this" output)
+                     (scholia-export-test--column "first reply" output)))
+          (should-not (string-match-p "\\bnil\\b" output)))))))
+
+(ert-deftest scholia-export-session-orders-by-session-then-file ()
+  "Several sessions render one after another, each naming itself.
+The files are dealt out so that ordering them by name alone crosses the
+session boundary: a rendering grouped by session reads f2 f4 f1 f3, one
+sorted globally reads f1 f2 f3 f4."
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let* ((source scholia-export-test--source)
+             (files (mapcar (lambda (name)
+                              (scholia-export-test--write
+                               directory name source))
+                            '("f1.txt" "f2.txt" "f3.txt" "f4.txt")))
+             (markers nil))
+        (scholia-export-test--session
+         "sess-uno"
+         (scholia-export-test--record (nth 1 files) "id-b" "note b" source)
+         (scholia-export-test--record (nth 3 files) "id-d" "note d" source))
+        (scholia-export-test--session
+         "sess-duo"
+         (scholia-export-test--record (nth 0 files) "id-a" "note a" source)
+         (scholia-export-test--record (nth 2 files) "id-c" "note c" source))
+        (let ((output (scholia-export-session '("sess-uno" "sess-duo"))))
+          (setq markers (list "sess-uno" (nth 1 files) (nth 3 files)
+                              "sess-duo" (nth 0 files) (nth 2 files)))
+          (dolist (marker markers)
+            (should (string-search marker output)))
+          (should (apply #'<
+                         (mapcar (lambda (marker) (string-search marker output))
+                                 markers))))))))
+
+(ert-deftest scholia-export-session-puts-a-rendering-where-the-target-points ()
+  "The rendering comes back whatever the target, and the format is a caller's."
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let ((file (scholia-export-test--write
+                   directory "source.txt" scholia-export-test--source)))
+        (scholia-export-test--session
+         "targets"
+         (scholia-export-test--record file "id-a" "check this"
+                                      scholia-export-test--source))
+        (let* ((kill-ring nil)
+               (interprogram-cut-function nil)
+               (interprogram-paste-function nil)
+               (target (expand-file-name "export.txt" directory))
+               (expected (scholia-export-session "targets")))
+          (unwind-protect
+              (progn
+                (should (string-match-p "check this" expected))
+                (should-not (get-buffer scholia-export-buffer-name))
+                (should-not kill-ring)
+                (should (equal (scholia-export-session "targets" 'kill-ring)
+                               expected))
+                (should (equal (current-kill 0) expected))
+                (should (equal (scholia-export-session "targets" target)
+                               expected))
+                (should (equal (with-temp-buffer
+                                 (insert-file-contents target)
+                                 (buffer-string))
+                               expected))
+                (should (equal (scholia-export-session "targets" 'buffer)
+                               expected))
+                (should (equal (with-current-buffer scholia-export-buffer-name
+                                 (buffer-string))
+                               expected))
+                (let ((diff (scholia-export-session "targets" nil 'diff)))
+                  (should (string-prefix-p (concat "--- " file) diff))
+                  (should-not (string-match-p "int gamma = delta;" diff))))
+            (when (get-buffer scholia-export-buffer-name)
+              (kill-buffer scholia-export-buffer-name))))))))
+
+
+(ert-deftest scholia-export-session-keeps-source-comments-and-missing-roots ()
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let* ((source scholia-export-test--source)
+             (present (scholia-export-test--write directory "present.el" source))
+             (gone (expand-file-name "gone.el" directory))
+             (missing (scholia-export-test--on-line "id-gone" 3 "lost note")))
+        (scholia-export-test--session
+         "sources"
+         (scholia-export-test--record present "id-present" "live note" source)
+         (scholia-db-make-record
+          gone (list missing (scholia-export-test--reply "id-reply" "nested" "id-gone"))
+          (scholia-export-test--checksum source)))
+        (dolist (format '(integrate diff))
+          (let ((output (scholia-export-session "sources" nil format)))
+            (should (string-match-p ";.*live note" output))
+            (should-not (string-match-p "#.*live note" output))
+            (should (string-match-p "epsilon zeta" output))
+            (should (string-match-p "lost note (stale)" output))
+            (should (string-match-p "nested" output))))
+        (let ((output (scholia-export-session "sources")))
+          (should (string-match-p (concat (regexp-quote gone) ":3:13 \\[id-gone\\]")
+                                  output))
+          (should (string-match-p "3 | epsilon zeta" output))
+          (should (string-match-p "lost note (stale)" output)))))))
+
+(ert-deftest scholia-export-session-reads-each-session-once ()
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let* ((source scholia-export-test--source)
+             (first (scholia-export-test--write directory "first.txt" source))
+             (second (scholia-export-test--write directory "second.txt" source))
+             (original (symbol-function 'scholia-db--reading))
+             (reads 0))
+        (scholia-export-test--session
+         "one-read"
+         (scholia-export-test--record first "id-a" "first" source)
+         (scholia-export-test--record second "id-b" "second" source))
+        (cl-letf (((symbol-function 'scholia-db--reading)
+                   (lambda (&rest arguments)
+                     (setq reads (1+ reads))
+                     (apply original arguments))))
+          (scholia-export-session "one-read"))
+        (should (= reads 1))))))
+
+(ert-deftest scholia-export-session-interactively-completes-session-names ()
+  (let ((arguments nil))
+    (cl-letf (((symbol-function 'scholia-session-list)
+               (lambda () '("known")))
+              ((symbol-function 'completing-read)
+               (lambda (&rest input)
+                 (setq arguments input)
+                 "known"))
+              ((symbol-function 'scholia-export--session-payload)
+               (lambda (&rest _) "output"))
+              ((symbol-function 'scholia-export--show)
+               (lambda (&rest _))))
+      (call-interactively #'scholia-export-session))
+    (should (equal (nth 1 arguments) '("known")))
+    (should (nth 3 arguments))))
 
 (provide 'scholia-export-test)
 ;;; scholia-export-test.el ends here

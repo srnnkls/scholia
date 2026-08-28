@@ -162,27 +162,33 @@ Each origin is reported as a base name without its extension, so a source
 load and a bytecode load are indistinguishable to the assertion.")
 
 (defconst scholia-vars-test--autoloaded-commands
-  '(scholia-mode scholia-session-switch scholia-export)
+  '(scholia-mode scholia-session-switch scholia-export scholia-search
+                 scholia-export-session scholia-org-remark-export)
   "One command per feature module the entry point must publish.
 Command `scholia-mode' requires `scholia-core' from its own body, so the
 annotation commands arrive with it; a module nothing requires reaches the
 user only through a cookie of its own.")
 
 (defun scholia-vars-test--autoload-probe (generated)
-  "Return a form reporting which commands GENERATED makes autoloadable.
-The leaf is kept out of the scan, so only a cookie carried by another file
-in the project root can make a command autoloadable."
+  "Return a form reporting which commands GENERATED can autoload.
+Every root Elisp file but `scholia.el' is kept out of the scan, so only its
+cookies can make a command autoloadable."
   (let ((root (expand-file-name scholia-test-project-root)))
     `(progn
        (require 'loaddefs-gen)
-       (loaddefs-generate ,root ,generated
-                          (list ,(expand-file-name "scholia-vars.el" root)))
+       (loaddefs-generate
+        ,root ,generated
+        (seq-remove (lambda (file)
+                      (file-equal-p file
+                                    (expand-file-name "scholia.el" ,root)))
+                    (directory-files ,root t "\\.el\\'")))
        (load ,generated t t)
        (prin1 (list :autoloaded
                     (seq-remove
                      (lambda (command)
                        (and (fboundp command)
-                            (autoloadp (symbol-function command))))
+                            (autoloadp (symbol-function command))
+                            (commandp command)))
                      ',scholia-vars-test--autoloaded-commands)
                     :without-loading-scholia (not (featurep 'scholia)))))))
 

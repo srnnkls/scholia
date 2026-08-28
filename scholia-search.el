@@ -1,0 +1,123 @@
+;;; scholia-search.el --- Cross-session search  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Sören Nikolaus
+
+;; Author: Sören Nikolaus <soeren@code17.io>
+;; Maintainer: Sören Nikolaus <soeren@code17.io>
+;; URL: https://github.com/srnnkls/scholia
+;; Keywords: convenience, tools
+
+;; This file is not part of GNU Emacs.
+
+;;; Commentary:
+
+;; Finds annotations stored across scholia sessions and opens their source
+;; locations.
+
+;;; Code:
+
+(require 'seq)
+(require 'scholia-db)
+(require 'scholia-session)
+
+(defun scholia-search-annotations ()
+  "Return the annotations stored in every session with their context.
+Each entry carries `:session', `:file', `:record' and `:annotation'."
+  (apply #'append
+         (mapcar
+          (lambda (session)
+            (let ((session-file (scholia-session-file session)))
+              (scholia-db--reading
+               session-file
+               (lambda (store)
+                 (apply #'append
+                        (mapcar
+                         (lambda (file)
+                           (let ((record (scholia-store-record store file)))
+                             (mapcar (lambda (annotation)
+                                       (list :session session
+                                             :file file
+                                             :record record
+                                             :annotation annotation))
+                                     (scholia-db-record-annotations record))))
+                         (scholia-store-files store)))))))
+          (scholia-session-list))))
+
+(defun scholia-search-candidate-string (entry)
+  "Return the completion candidate string for annotation ENTRY."
+  (let ((annotation (plist-get entry :annotation)))
+    (format "%s — %s — %s — %s — [%s]"
+            (scholia-db-annotation-text annotation)
+            (scholia-db-annotation-annotated-text annotation)
+            (plist-get entry :file)
+            (plist-get entry :session)
+            (scholia-db-annotation-id annotation))))
+
+(defun scholia-search--candidate-entry (candidate candidates)
+  "Return the entry CANDIDATE names in CANDIDATES."
+  (cdr (assoc-string candidate candidates)))
+
+(defun scholia-search--jump-annotation (entry)
+  "Return the annotation ENTRY should open at.
+Replies follow their `:reply-to' parents in the same record to a position."
+  (let ((annotation (plist-get entry :annotation))
+        (annotations (scholia-db-record-annotations
+                      (plist-get entry :record)))
+        (seen nil))
+    (while (and annotation
+                (not (scholia-db-annotation-beg annotation))
+                (scholia-db-annotation-reply-to annotation))
+      (let ((id (scholia-db-annotation-id annotation)))
+        (when (member id seen)
+          (user-error "Reply thread contains a cycle"))
+        (push id seen)
+        (setq annotation
+              (seq-find
+               (lambda (candidate)
+                 (equal (scholia-db-annotation-reply-to annotation)
+                        (scholia-db-annotation-id candidate)))
+               annotations))))
+    (unless (and annotation (scholia-db-annotation-beg annotation))
+      (user-error "Annotation has no stored position"))
+    annotation))
+
+(defun scholia-search ()
+  "Select an annotation across sessions and visit its source location."
+  (interactive)
+  (let* ((entries (scholia-search-annotations))
+         (candidates (mapcar (lambda (entry)
+                               (cons (scholia-search-candidate-string entry)
+                                     entry))
+                             entries))
+         (table (lambda (string predicate action)
+                  (if (eq action 'metadata)
+                      '(metadata (category . scholia-annotation))
+                    (complete-with-action action candidates string predicate))))
+         (selected (completing-read "Annotation: " table nil t)))
+    (unless (equal selected "")
+      (let* ((entry (scholia-search--candidate-entry selected candidates))
+             (session (plist-get entry :session))
+             (annotation (scholia-search--jump-annotation entry))
+             (file (plist-get entry :file))
+             (buffer (find-buffer-visiting file)))
+        (when buffer
+          (with-current-buffer buffer
+            (when (or scholia-mode (scholia-buffer-chains))
+              (let ((scholia--unplaced-annotations
+                     (append scholia--unplaced-annotations
+                             (unless scholia-mode
+                               (scholia-db-record-annotations
+                                (scholia-db-record (scholia-session-file)
+                                                   file))))))
+                (scholia-save-annotations)))))
+        (unless (equal session (scholia-session-default-name))
+          (scholia-session-switch session))
+        (find-file file)
+        (setq-local scholia-session session)
+        (when scholia-mode
+          (scholia-shutdown nil)
+          (scholia-mode 1))
+        (goto-char (scholia-db-annotation-beg annotation))))))
+
+(provide 'scholia-search)
+;;; scholia-search.el ends here
