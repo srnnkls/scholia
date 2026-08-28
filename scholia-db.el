@@ -340,6 +340,28 @@ with that record.")
    annotation :sends (append (scholia-db-annotation-sends annotation)
                              (list send))))
 
+(defun scholia-db-add-send-batch (session-file ids send)
+  "Append SEND to annotations named by IDS in SESSION-FILE."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (dolist (file (scholia-store-files store))
+       (let ((record (scholia-store-record store file)))
+         (when (seq-some (lambda (annotation)
+                           (member (scholia-db-annotation-id annotation) ids))
+                         (scholia-db-record-annotations record))
+           (scholia-store-put-record
+            store
+            (scholia-db-make-record
+             file
+             (mapcar
+              (lambda (annotation)
+                (if (member (scholia-db-annotation-id annotation) ids)
+                    (scholia-db-annotation-add-send annotation send)
+                  annotation))
+              (scholia-db-record-annotations record))
+             (scholia-db-record-checksum record)))))))))
+
 (defun scholia-db-send-batch (annotations send sender)
   "Return ANNOTATIONS carrying SEND once SENDER has taken them.
 SENDER is called once and with no arguments, and only a return of its
@@ -355,7 +377,7 @@ returned either way."
                       annotations)))
     (condition-case failure
         (run-hook-with-args 'scholia-send-functions sent send)
-      (error (message "scholia: send observer failed: %S" failure)))
+      ((error quit) (message "scholia: send observer failed: %S" failure)))
     sent))
 
 

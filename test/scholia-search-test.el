@@ -443,5 +443,75 @@ sends the reader to a place nobody annotated."
           (should (equal annotation (plist-get entry :annotation)))))
       (should (= 1 reads)))))
 
+(ert-deftest scholia-search-sends-to-keeps-matching-entries-whole ()
+  "Filtering history by destination keeps the collector's full entries."
+  (scholia-search-test--with-state
+    (let* ((alpha-file (scholia-search-test--source "alpha.txt" "alpha\n"))
+           (beta-file (scholia-search-test--source "beta.txt" "beta\n"))
+           (alpha-send (scholia-db-make-send :kind 'agent
+                                              :target "claude-alpha"
+                                              :label "Claude · Alpha"
+                                              :herdr-session "review"
+                                              :format 'rustc
+                                              :scope 'file))
+           (beta-send (scholia-db-make-send :kind 'agent
+                                             :target "claude-beta"
+                                             :label "Claude · Beta"
+                                             :herdr-session "review"
+                                             :format 'rustc
+                                             :scope 'file))
+           (alpha (plist-put (scholia-search-test--annotation
+                              "alpha-id" "alpha note" "alpha" 1 6)
+                             :sends (list alpha-send)))
+           (beta (plist-put (scholia-search-test--annotation
+                             "beta-id" "beta note" "beta" 1 5)
+                            :sends (list beta-send))))
+      (scholia-search-test--seed "alpha" alpha-file (list alpha))
+      (scholia-search-test--seed "beta" beta-file (list beta))
+      (let ((entries (scholia-search-sends-to "claude-alpha")))
+        (should (= 1 (length entries)))
+        (should (equal (list "alpha" alpha-file "alpha note")
+                       (scholia-search-test--origin (car entries))))
+        (should (equal (list alpha)
+                       (scholia-db-record-annotations
+                        (plist-get (car entries) :record))))))))
+
+(ert-deftest scholia-search-sends-groups-search-keys-and-jumps-reply-to-root ()
+  "Send completion groups destinations, finds every key, and follows replies."
+  (scholia-search-test--with-state
+    (let* ((file (scholia-search-test--source "thread.txt" "alpha beta\n"))
+           (send (scholia-db-make-send :kind 'agent
+                                        :target "claude-planner"
+                                        :label "Claude · Planner"
+                                        :herdr-session "sprint-7"
+                                        :format 'rustc
+                                        :scope 'file))
+           (parent (scholia-search-test--annotation
+                    "parent" "parent note" "alpha" 1 6))
+           (reply (plist-put (scholia-search-test--reply
+                              "reply" "reply note" "parent")
+                             :sends (list send))))
+      (scholia-search-test--seed "planning" file (list parent reply))
+      (unwind-protect
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _)
+                       (let* ((metadata (completion-metadata "" collection nil))
+                              (group (completion-metadata-get metadata 'group-function))
+                              (candidate (seq-find
+                                          (lambda (item)
+                                            (string-match-p
+                                             (regexp-quote (scholia-db-send-at send)) item))
+                                          (all-completions "" collection))))
+                         (should (string-match-p "Claude · Planner" candidate))
+                         (should (string-match-p "sprint-7" candidate))
+                         (should (equal "Claude · Planner"
+                                        (funcall group candidate nil)))
+                         candidate))))
+            (scholia-search-sends)
+            (should (equal "planning" (scholia-session-name)))
+            (should (equal file (buffer-file-name)))
+            (should (= 1 (point))))
+        (scholia-search-test--forget file)))))
+
 (provide 'scholia-search-test)
 ;;; scholia-search-test.el ends here

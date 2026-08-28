@@ -21,6 +21,8 @@
 (require 'scholia-overlay)
 (require 'scholia-db)
 
+(declare-function scholia-ui-read-annotation "scholia-ui")
+
 
 ;;;; What a buffer annotates, and into which session
 
@@ -385,7 +387,10 @@ deactivated, so the chord pressed twice cannot annotate it twice."
                             (buffer-substring-no-properties (car bounds)
                                                             (cdr bounds))))
      (t
-      (let ((note (or text (read-string "Annotation: "))))
+      (let ((note (or text
+                      (progn
+                        (require 'scholia-ui)
+                        (scholia-ui-read-annotation)))))
         (if (string= note "")
             (scholia-core--report "Annotation text is empty")
           (scholia-create-chain (car bounds) (cdr bounds) note)

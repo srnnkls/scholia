@@ -36,6 +36,7 @@
 (autoload 'scholia-session-load-assignments "scholia-session" nil t)
 ;;;###autoload (autoload 'scholia-export "scholia-export" nil t)
 ;;;###autoload (autoload 'scholia-search "scholia-search" nil t)
+;;;###autoload (autoload 'scholia-search-sends "scholia-search" nil t)
 ;;;###autoload (autoload 'scholia-export-session "scholia-export" nil t)
 ;;;###autoload
 (autoload 'scholia-org-remark-export "scholia-org-remark" nil t)

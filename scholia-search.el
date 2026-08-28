@@ -81,6 +81,83 @@ Replies follow their `:reply-to' parents in the same record to a position."
       (user-error "Annotation has no stored position"))
     annotation))
 
+(defun scholia-search-sends-to (destination)
+  "Return collector entries sent to DESTINATION."
+  (seq-filter
+   (lambda (entry)
+     (seq-some (lambda (send)
+                 (equal destination (scholia-db-send-target send)))
+               (scholia-db-annotation-sends
+                (plist-get entry :annotation))))
+   (scholia-search-annotations)))
+
+(defun scholia-search--send-candidates (entries)
+  "Return completion candidates for sends in ENTRIES."
+  (apply #'append
+         (mapcar
+          (lambda (entry)
+            (mapcar
+             (lambda (send)
+               (cons
+                (format "%s — %s — %s — [%s]"
+                        (scholia-db-send-label send)
+                        (scholia-db-send-herdr-session send)
+                        (scholia-db-send-at send)
+                        (scholia-db-annotation-id
+                         (plist-get entry :annotation)))
+                (list entry send)))
+             (scholia-db-annotation-sends
+              (plist-get entry :annotation))))
+          entries)))
+
+(defun scholia-search--jump (entry)
+  "Visit the source location belonging to ENTRY."
+  (let* ((session (plist-get entry :session))
+         (annotation (scholia-search--jump-annotation entry))
+         (file (plist-get entry :file))
+         (buffer (find-buffer-visiting file)))
+    (when buffer
+      (with-current-buffer buffer
+        (when (or scholia-mode (scholia-buffer-chains))
+          (let ((scholia--unplaced-annotations
+                 (append scholia--unplaced-annotations
+                         (unless scholia-mode
+                           (scholia-db-record-annotations
+                            (scholia-db-record
+                             (scholia-session-file) file))))))
+            (scholia-save-annotations)))))
+    (unless (equal session (scholia-session-default-name))
+      (scholia-session-switch session))
+    (find-file file)
+    (setq-local scholia-session session)
+    (when scholia-mode
+      (scholia-shutdown nil)
+      (scholia-mode 1))
+    (goto-char (scholia-db-annotation-beg annotation))))
+
+(defun scholia-search-sends ()
+  "Select a send across sessions and visit its annotation."
+  (interactive)
+  (let* ((candidates (scholia-search--send-candidates
+                      (scholia-search-annotations)))
+         (table
+          (lambda (string predicate action)
+            (if (eq action 'metadata)
+                (list 'metadata
+                      '(category . scholia-send)
+                      (cons 'group-function
+                            (lambda (candidate transform)
+                              (if transform
+                                  candidate
+                                (scholia-db-send-label
+                                 (caddr
+                                  (assoc-string candidate candidates)))))))
+              (complete-with-action action candidates string predicate))))
+         (selected (completing-read "Send: " table nil t)))
+    (unless (equal selected "")
+      (scholia-search--jump
+       (car (scholia-search--candidate-entry selected candidates))))))
+
 (defun scholia-search ()
   "Select an annotation across sessions and visit its source location."
   (interactive)
@@ -92,32 +169,12 @@ Replies follow their `:reply-to' parents in the same record to a position."
          (table (lambda (string predicate action)
                   (if (eq action 'metadata)
                       '(metadata (category . scholia-annotation))
-                    (complete-with-action action candidates string predicate))))
+                    (complete-with-action action candidates string
+                                          predicate))))
          (selected (completing-read "Annotation: " table nil t)))
     (unless (equal selected "")
-      (let* ((entry (scholia-search--candidate-entry selected candidates))
-             (session (plist-get entry :session))
-             (annotation (scholia-search--jump-annotation entry))
-             (file (plist-get entry :file))
-             (buffer (find-buffer-visiting file)))
-        (when buffer
-          (with-current-buffer buffer
-            (when (or scholia-mode (scholia-buffer-chains))
-              (let ((scholia--unplaced-annotations
-                     (append scholia--unplaced-annotations
-                             (unless scholia-mode
-                               (scholia-db-record-annotations
-                                (scholia-db-record (scholia-session-file)
-                                                   file))))))
-                (scholia-save-annotations)))))
-        (unless (equal session (scholia-session-default-name))
-          (scholia-session-switch session))
-        (find-file file)
-        (setq-local scholia-session session)
-        (when scholia-mode
-          (scholia-shutdown nil)
-          (scholia-mode 1))
-        (goto-char (scholia-db-annotation-beg annotation))))))
+      (scholia-search--jump
+       (scholia-search--candidate-entry selected candidates)))))
 
 (provide 'scholia-search)
 ;;; scholia-search.el ends here

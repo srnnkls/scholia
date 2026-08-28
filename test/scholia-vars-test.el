@@ -163,7 +163,7 @@ load and a bytecode load are indistinguishable to the assertion.")
 
 (defconst scholia-vars-test--autoloaded-commands
   '(scholia-mode scholia-session-switch scholia-export scholia-search
-                 scholia-export-session scholia-org-remark-export)
+                 scholia-search-sends scholia-export-session scholia-org-remark-export)
   "One command per feature module the entry point must publish.
 Command `scholia-mode' requires `scholia-core' from its own body, so the
 annotation commands arrive with it; a module nothing requires reaches the
@@ -190,6 +190,10 @@ cookies can make a command autoloadable."
                             (autoloadp (symbol-function command))
                             (commandp command)))
                      ',scholia-vars-test--autoloaded-commands)
+                    :search-sends-autoload-file
+                    (and (fboundp 'scholia-search-sends)
+                         (autoloadp (symbol-function 'scholia-search-sends))
+                         (nth 1 (symbol-function 'scholia-search-sends)))
                     :without-loading-scholia (not (featurep 'scholia)))))))
 
 (ert-deftest scholia-vars-entry-point-requires-the-leaf-and-holds-no-state ()
@@ -208,7 +212,9 @@ cookies can make a command autoloadable."
         (should (equal (scholia-vars-test--probe
                         (scholia-vars-test--autoload-probe
                          (expand-file-name "scholia-autoloads.el" dir)))
-                       '(:autoloaded nil :without-loading-scholia t)))
+                       '(:autoloaded nil
+                         :search-sends-autoload-file "scholia-search"
+                         :without-loading-scholia t)))
       (delete-directory dir t))))
 
 

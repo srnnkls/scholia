@@ -175,23 +175,14 @@
 (ert-deftest scholia-harness-eask-resolves-the-herdr-exclusion ()
   (skip-unless (fboundp 'eask-expand-file-specs))
   (let* ((default-directory scholia-test-project-root)
-         (probes (list (scholia-test-project-file "test/scholia-herdr-test.el")
-                       (scholia-test-project-file "scholia-herdr.el"))))
-    (unwind-protect
-        (progn
-          (dolist (probe probes)
-            (write-region "" nil probe nil 'silent))
-          (let ((test-files (mapcar #'file-name-nondirectory
-                                    (eask-expand-file-specs scholia-test-file-spec)))
-                (package-files (mapcar #'file-name-nondirectory
-                                       (eask-expand-file-specs (eask-files-spec)))))
-            (should (member "scholia-smoke-test.el" test-files))
-            (should-not (member "scholia-herdr-test.el" test-files))
-            (should (member "scholia.el" package-files))
-            (should-not (member "scholia-herdr.el" package-files))))
-      (dolist (probe probes)
-        (when (file-exists-p probe)
-          (delete-file probe))))))
+         (test-files (mapcar #'file-name-nondirectory
+                             (eask-expand-file-specs scholia-test-file-spec)))
+         (package-files (mapcar #'file-name-nondirectory
+                                (eask-expand-file-specs (eask-files-spec)))))
+    (should (member "scholia-smoke-test.el" test-files))
+    (should-not (member "scholia-herdr-test.el" test-files))
+    (should (member "scholia.el" package-files))
+    (should-not (member "scholia-herdr.el" package-files))))
 
 (provide 'scholia-harness-test)
 ;;; scholia-harness-test.el ends here
