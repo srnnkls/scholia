@@ -273,6 +273,10 @@ covers no text, so it passes nil for BEG, END and ANNOTATED-TEXT."
   "Return the column within its line where ANNOTATION ends."
   (plist-get annotation :end-column))
 
+(defun scholia-db-annotation-revision (annotation)
+  "Return the revision ANNOTATION describes, or nil for the working tree."
+  (plist-get annotation :revision))
+
 (defun scholia-db-annotation-reply-to (annotation)
   "Return the id of the annotation ANNOTATION answers, or nil."
   (plist-get annotation :reply-to))
@@ -440,7 +444,9 @@ together locate the annotation once the file itself is gone.  Both
 columns index into `:line-text', so an annotation reaching further down
 ends where that line ends.  Replies hold no position and pass through
 untouched."
-  (if (scholia-db-annotation-reply-p annotation)
+  (if (or (scholia-db-annotation-reply-p annotation)
+          (not (scholia-db-annotation-beg annotation))
+          (scholia-db-annotation-revision annotation))
       annotation
     (save-restriction
       (widen)
@@ -540,7 +546,7 @@ returning through a merge is for the merge path to answer."
             annotations)))
 
 (defun scholia-db-save (session-file file annotations checksum
-                                     &optional preserve)
+                                     &optional preserve additive)
   "Store ANNOTATIONS of FILE with CHECKSUM into SESSION-FILE.
 Source context is snapshot from the current buffer, which is the one
 visiting FILE.  Fields an incoming annotation does not carry are taken
@@ -560,6 +566,8 @@ annotation the caller cannot place and one the user removed both reach
 here as an absence from ANNOTATIONS.  An entry already carried by
 ANNOTATIONS or by a refolded reply is left to that carrier, so passing
 the stored annotations back wholesale cannot duplicate them.
+
+ADDITIVE preserves every stored annotation and its checksum.
 
 A record that ends up holding a preserved annotation keeps the CHECKSUM
 it had rather than taking the new one, because CHECKSUM fingerprints a
@@ -584,16 +592,19 @@ every other record where another writer left it."
    session-file
    (lambda (store)
      (scholia-db--fold store session-file file annotations checksum
-                       preserve))))
+                       preserve additive))))
 
-(defun scholia-db--fold (store session-file file annotations checksum preserve)
+(defun scholia-db--fold (store session-file file annotations checksum preserve
+                                additive)
   "Fold ANNOTATIONS of FILE into the record STORE carries for it.
 SESSION-FILE names the session STORE was opened on, CHECKSUM
-fingerprints the buffer and PRESERVE holds the stored annotations the
-caller could not rebuild from it, all as `scholia-db-save' takes them."
+fingerprints the buffer, PRESERVE holds stored annotations the caller could
+not rebuild from it, and ADDITIVE preserves every stored annotation."
   (scholia-db--publish store session-file)
   (let* ((record (scholia-store-record store file))
          (stored (scholia-db-record-annotations record))
+         (preserve (if additive stored preserve))
+         (checksum (if additive (scholia-db-record-checksum record) checksum))
          (snapshots (mapcar (lambda (annotation)
                               (scholia-db--carry-forward
                                (scholia-db--snapshot annotation) stored))
@@ -683,6 +694,22 @@ no position and pass through untouched."
         (scholia-db-annotation-set-bounds
          annotation (car bounds) (cdr bounds))))))
 
+(defun scholia-db--materialize-location (annotation)
+  "Return ANNOTATION with a resolved source location made into bounds."
+  (if (or (scholia-db-annotation-reply-p annotation)
+          (scholia-db-annotation-beg annotation))
+      annotation
+    (save-restriction
+      (widen)
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (1- (scholia-db-annotation-line annotation)))
+        (let ((bol (line-beginning-position)))
+          (scholia-db-annotation-set-bounds
+           annotation
+           (+ bol (scholia-db-annotation-column annotation))
+           (+ bol (scholia-db-annotation-end-column annotation))))))))
+
 (defun scholia-db-buffer-annotations (record checksum &optional unplaced)
   "Return the annotations RECORD carries, placed in the current buffer.
 CHECKSUM fingerprints the buffer as it is now.  While it matches the one
@@ -697,20 +724,21 @@ every one.  They keep the `:line' and `:line-text' snapshot locating
 them once the text they covered is gone, so a caller reports them and
 hands them to `scholia-db-save' as its PRESERVE argument instead of
 letting the next save read them as deleted."
-  (if (equal (scholia-db-record-checksum record) checksum)
-      (progn
-        (when unplaced (funcall unplaced nil))
-        (scholia-db-record-annotations record))
-    (let* ((stored (scholia-db-record-annotations record))
-           (placed (delq nil (mapcar #'scholia-db--relocate stored)))
-           (ids (mapcar #'scholia-db-annotation-id placed)))
-      (when unplaced
-        (funcall unplaced
-                 (seq-remove
-                  (lambda (annotation)
-                    (member (scholia-db-annotation-id annotation) ids))
-                  stored)))
-      placed)))
+  (let ((stored (mapcar #'scholia-db--materialize-location
+                        (scholia-db-record-annotations record))))
+    (if (equal (scholia-db-record-checksum record) checksum)
+        (progn
+          (when unplaced (funcall unplaced nil))
+          stored)
+      (let* ((placed (delq nil (mapcar #'scholia-db--relocate stored)))
+             (ids (mapcar #'scholia-db-annotation-id placed)))
+        (when unplaced
+          (funcall unplaced
+                   (seq-remove
+                    (lambda (annotation)
+                      (member (scholia-db-annotation-id annotation) ids))
+                    stored)))
+        placed))))
 
 
 ;;;; Merging

@@ -53,7 +53,8 @@ the wait outlasts a whole session write rather than a statement.")
   '("CREATE TABLE IF NOT EXISTS session (key TEXT PRIMARY KEY, value TEXT)"
     "CREATE TABLE IF NOT EXISTS records (file TEXT PRIMARY KEY, checksum TEXT)"
     "CREATE TABLE IF NOT EXISTS annotations \
-(file TEXT NOT NULL, id TEXT, reply_to TEXT, annotation TEXT NOT NULL)"
+(file TEXT NOT NULL, id TEXT, reply_to TEXT, annotation TEXT NOT NULL, \
+revision TEXT)"
     "CREATE INDEX IF NOT EXISTS annotations_by_file ON annotations (file)"
     "CREATE INDEX IF NOT EXISTS annotations_by_id ON annotations (id)"
     "CREATE INDEX IF NOT EXISTS annotations_by_reply_to \
@@ -258,9 +259,28 @@ tell from a stranger's."
   (scholia-store--must (sqlite-commit connection)
                        "Could not commit to %s" session-file))
 
+(defun scholia-store--revision-column-p (connection)
+  "Return non-nil when CONNECTION has the annotations revision column."
+  (member "revision"
+          (mapcar #'cadr
+                  (sqlite-select connection "PRAGMA table_info(annotations)"))))
+
 (defun scholia-store--adopt (connection session-file)
   "Return a store reading the database CONNECTION found at SESSION-FILE."
   (sqlite-pragma connection "journal_mode=wal")
+  (sqlite-execute connection "BEGIN IMMEDIATE")
+  (let ((done nil))
+    (unwind-protect
+        (progn
+          (unless (scholia-store--revision-column-p connection)
+            (sqlite-execute connection
+                            "ALTER TABLE annotations ADD COLUMN revision TEXT"))
+          (scholia-store--must (sqlite-commit connection)
+                               "Could not commit to %s" session-file)
+          (setq done t))
+      (unless done
+        (scholia-store--must (sqlite-rollback connection)
+                             "Could not roll back %s" session-file))))
   (scholia-store--make :file session-file :connection connection))
 
 (defun scholia-store--create (connection session-file made)
@@ -490,9 +510,13 @@ transaction open on.  `BEGIN' is issued as a statement for the reason
 
 (defun scholia-store-annotations (store file)
   "Return the annotations STORE carries for FILE, oldest row first."
-  (mapcar (lambda (row) (scholia-store--parse (car row)))
+  (mapcar (lambda (row)
+            (let ((annotation (scholia-store--parse (cadr row))))
+              (if (car row)
+                  (plist-put annotation :revision (car row))
+                annotation)))
           (sqlite-select (scholia-store--connection store)
-                         "SELECT annotation FROM annotations \
+                         "SELECT revision, annotation FROM annotations \
 WHERE file = ? ORDER BY rowid"
                          (list (scholia-store--print file)))))
 
@@ -511,12 +535,16 @@ WHERE file = ? ORDER BY rowid"
   "Append ANNOTATION to the annotations STORE carries for FILE.
 One row is added rather than the record rewritten, so an annotation
 another writer filed under FILE meanwhile stays where it is."
-  (sqlite-execute (scholia-store--connection store)
-                  "INSERT INTO annotations VALUES (?, ?, ?, ?)"
-                  (list (scholia-store--print file)
-                        (plist-get annotation :id)
-                        (plist-get annotation :reply-to)
-                        (scholia-store--print annotation))))
+  (let ((stored (copy-sequence annotation)))
+    (cl-remf stored :revision)
+    (sqlite-execute (scholia-store--connection store)
+                    "INSERT INTO annotations \
+(file, id, reply_to, annotation, revision) VALUES (?, ?, ?, ?, ?)"
+                    (list (scholia-store--print file)
+                          (plist-get annotation :id)
+                          (plist-get annotation :reply-to)
+                          (scholia-store--print stored)
+                          (plist-get annotation :revision)))))
 
 (defun scholia-store-remove-record (store file)
   "Take the record FILE keys, and the annotations under it, out of STORE."

@@ -15,11 +15,13 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'seq)
 (require 'thingatpt)
 (require 'scholia-vars)
 (require 'scholia-overlay)
 (require 'scholia-db)
+(require 'scholia-locate)
 
 (declare-function scholia-ui-read-annotation "scholia-ui")
 
@@ -145,15 +147,18 @@ however often it is stored and whatever the edits in between."
   "Return the annotation CHAIN stands for, spanning all of its overlays."
   (save-restriction
     (widen)
-    (let ((beg (overlay-start (car chain)))
-          (end (overlay-end (car (last chain)))))
-      (scholia-db-make-annotation
-       (scholia-core--chain-id chain)
-       (overlay-get (car chain) 'scholia-annotation)
-       beg
-       end
-       (buffer-substring-no-properties beg end)
-       (scholia-chain-color-index chain)))))
+    (let* ((beg (overlay-start (car chain)))
+           (end (overlay-end (car (last chain))))
+           (annotation (scholia-db-make-annotation
+                        (scholia-core--chain-id chain)
+                        (overlay-get (car chain) 'scholia-annotation)
+                        beg end
+                        (buffer-substring-no-properties beg end)
+                        (scholia-chain-color-index chain)))
+           (revision (overlay-get (car chain) 'scholia-core--revision)))
+      (if revision
+          (scholia-db--with-fields annotation :revision revision)
+        annotation))))
 
 (defun scholia-core--buffer-annotations ()
   "Return one annotation per chain of this buffer, in buffer order."
@@ -171,27 +176,78 @@ draw on."
       (put (overlay-get (car chain) 'scholia--chain-id)
            'scholia-core--id
            (scholia-db-annotation-id annotation))
+      (when-let ((revision (scholia-db-annotation-revision annotation)))
+        (overlay-put (car chain) 'scholia-core--revision revision)
+        (overlay-put (car chain) 'after-string
+                     (concat (overlay-get (car chain) 'after-string)
+                             (format " [%s]" revision))))
       chain)))
 
 
 ;;;; Storing
 
 (defun scholia-core--store (annotations)
-  "Store ANNOTATIONS of this buffer, replacing whatever its record had.
-The annotations of `scholia--unplaced-annotations' are folded back into
-the record as they are, so a save never drops what could not be shown.
-A buffer visiting no file keys no record and is reported instead, which
-every path storing a buffer inherits."
-  (let ((file (scholia-buffer-file)))
-    (if (not file)
+  "Store ANNOTATIONS grouped by the source files their positions resolve to."
+  (let ((groups nil)
+        (unresolved nil)
+        (replies (seq-filter #'scholia-db-annotation-reply-p annotations)))
+    (dolist (annotation
+             (seq-remove #'scholia-db-annotation-reply-p annotations))
+      (let ((location (run-hook-with-args-until-success
+                       'scholia-location-functions
+                       (scholia-db-annotation-beg annotation))))
+        (if-let ((file (plist-get location :file)))
+            (let* ((group (or (assoc file groups)
+                              (car (push (list file) groups))))
+                   (fields (copy-sequence location)))
+              (when (and (scholia-db-annotation-revision annotation)
+                         (not (plist-get fields :revision)))
+                (cl-remf fields :revision))
+              (cl-remf fields :file)
+              (setq annotation
+                    (apply #'scholia-db--with-fields annotation fields))
+              (when (or (not (equal file (scholia-buffer-file)))
+                        (scholia-db-annotation-revision annotation))
+                (setq annotation
+                      (scholia-db-annotation-set-bounds annotation nil nil)))
+              (setcdr group (cons annotation (cdr group))))
+          (push annotation unresolved))))
+    (if unresolved
         (scholia-core--report
-         "Annotations can not be saved: unable to find a file for buffer %S"
+         "Annotations can not be saved: no location resolver claimed buffer %S"
          (buffer-name))
-      (scholia-db-save (scholia-session-file)
-                       file
-                       annotations
-                       (scholia-buffer-checksum)
-                       scholia--unplaced-annotations))))
+      (unless groups
+        (when-let ((location (run-hook-with-args-until-success
+                              'scholia-location-functions (point-min))))
+          (push (list (plist-get location :file)) groups)))
+      (dolist (reply replies)
+        (let ((group
+               (or (seq-find
+                    (lambda (candidate)
+                      (seq-find
+                       (lambda (annotation)
+                         (equal (scholia-db-annotation-id annotation)
+                                (scholia-db-annotation-reply-to reply)))
+                       (cdr candidate)))
+                    groups)
+                   (and (= (length groups) 1) (car groups)))))
+          (when group (setcdr group (cons reply (cdr group))))))
+      (if (not groups)
+          (scholia-core--report
+          "Annotations can not be saved: no location resolver claimed buffer %S"
+           (buffer-name))
+        (dolist (group groups)
+          (let* ((file (car group))
+                 (additive (or (not (equal file (scholia-buffer-file)))
+                               (seq-some #'scholia-db-annotation-revision
+                                         (cdr group))))
+                 (located (append (nreverse (cdr group))
+                                  (and (equal file (scholia-buffer-file))
+                                       scholia--hidden-revision-annotations))))
+            (scholia-db-save (scholia-session-file) file located
+                             (scholia-buffer-checksum)
+                             (unless additive scholia--unplaced-annotations)
+                             additive)))))))
 
 (defun scholia-save-annotations ()
   "Store the annotations of this buffer into its session.
@@ -307,12 +363,25 @@ render did not reach is reported by name and kept in the record."
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
   (let ((file (scholia-buffer-file)))
     (when (and file (not (scholia-buffer-chains)))
-      (let ((record (scholia-db-record (scholia-session-file) file)))
-        (setq scholia--unplaced-annotations
-              (seq-remove #'scholia-db-annotation-reply-p
-                          (scholia-db-record-annotations record)))
+      (let* ((record (scholia-db-record (scholia-session-file) file))
+             (annotations (seq-remove #'scholia-db-annotation-reply-p
+                                      (scholia-db-record-annotations record)))
+             (hidden (and (not scholia-show-revision-annotations)
+                          (seq-filter #'scholia-db-annotation-revision
+                                      annotations)))
+             (visible (seq-difference annotations hidden)))
+        (setq scholia--hidden-revision-annotations hidden
+              scholia--unplaced-annotations visible)
         (scholia-core--restore-placed
-         (scholia-db-buffer-annotations record (scholia-buffer-checksum)))
+         (scholia-db-buffer-annotations
+          (scholia-db-make-record file visible
+                                  (scholia-db-record-checksum record))
+          (scholia-buffer-checksum)))
+        (when hidden
+          (scholia-core--report
+           (concat "%d revision annotations hidden; set "
+                   "scholia-show-revision-annotations to show them")
+           (length hidden)))
         (when scholia--unplaced-annotations
           (scholia-core--report
            "%s changed on disk: %s kept but not shown"

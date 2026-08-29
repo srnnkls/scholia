@@ -169,6 +169,10 @@ position."
   "Whether scholia reports what it did in the echo area."
   :type 'boolean)
 
+(defcustom scholia-show-revision-annotations nil
+  "Whether working-tree buffers show annotations made against revisions."
+  :type 'boolean)
+
 (defcustom scholia-annotation-column 85
   "Column where annotation text starts."
   :type 'natnum)
@@ -198,6 +202,9 @@ Addresses `scholia-highlight-faces' and `scholia-annotation-text-faces'.")
   "Stored annotations this buffer could not be shown holding.
 Nothing on screen stands for them, so every save folds them back into
 the record as they are rather than writing a record without them.")
+
+(defvar-local scholia--hidden-revision-annotations nil
+  "Revision annotations intentionally not drawn in this buffer.")
 
 
 ;;;; The mode
