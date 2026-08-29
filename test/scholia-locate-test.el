@@ -168,5 +168,70 @@
               (should (string-match-p (regexp-quote revision) rendered)))
             (scholia-mode -1)))))))
 
+(ert-deftest scholia-locate-full-revision-save-replaces-only-that-revision ()
+  "A complete revision view replaces its roots without touching other views."
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer "working tree\n"
+      (let* ((file (buffer-file-name buffer))
+             (session (expand-file-name "revision-save.eld" scholia-session-directory))
+             (revision "1111111111111111111111111111111111111111")
+             (other-revision "2222222222222222222222222222222222222222")
+             (old (plist-put (scholia-db-make-annotation
+                              "old" "old revision root" nil nil "historical")
+                             :revision revision))
+             (other (plist-put (scholia-db-make-annotation
+                                "other" "other revision root" nil nil "other")
+                               :revision other-revision))
+             (working (scholia-db-make-annotation
+                       "working" "working root" 1 8 "working"))
+             (hook-bound (boundp 'scholia-location-functions))
+             (saved-hook (and hook-bound scholia-location-functions)))
+        (dolist (annotation (list old other))
+          (plist-put annotation :line 1)
+          (plist-put annotation :column 0)
+          (plist-put annotation :end-column 10))
+        (scholia-db-store-record
+         session (scholia-db-make-record file (list old other working) "seeded"))
+        (unwind-protect
+            (progn
+              (load "scholia-locate" nil t)
+              (set 'scholia-location-functions
+                   (list (lambda (_position)
+                           (list :file file :line 1 :column 0 :end-column 10
+                                 :revision revision))))
+              (erase-buffer)
+              (insert "historical\n")
+              (set-buffer-modified-p nil)
+              (setq-local scholia-session "revision-save")
+              (let ((scholia-autosave nil))
+                (scholia-mode 1)
+                (goto-char 1)
+                (should (scholia-buffer-chains))
+                (scholia-delete-annotation)
+                (scholia-annotate "replacement root")
+                (scholia-save-annotations)
+                (scholia-mode -1))
+              (let ((annotations (scholia-db-record-annotations
+                                  (scholia-db-record session file))))
+                (should-not (member "old" (mapcar #'scholia-db-annotation-id
+                                                   annotations)))
+                (should (member "other" (mapcar #'scholia-db-annotation-id
+                                                 annotations)))
+                (should (member "working" (mapcar #'scholia-db-annotation-id
+                                                   annotations)))
+                (should (equal (sort (mapcar #'scholia-db-annotation-text annotations)
+                                     #'string<)
+                               '("other revision root" "replacement root" "working root")))
+                (should (equal (plist-get
+                                (seq-find (lambda (annotation)
+                                            (equal (scholia-db-annotation-text annotation)
+                                                   "replacement root"))
+                                          annotations)
+                                :revision)
+                               revision))))
+          (if hook-bound
+              (set 'scholia-location-functions saved-hook)
+            (makunbound 'scholia-location-functions)))))))
+
 (provide 'scholia-locate-test)
 ;;; scholia-locate-test.el ends here

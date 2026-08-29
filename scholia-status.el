@@ -288,27 +288,46 @@
        (scholia-session-file session) (apply #'append ids) send))))
 
 (defun scholia-status--file-groups (entries)
-  "Return ENTRIES grouped by source file in their original order."
+  "Return ENTRIES grouped by source file and root source view."
   (let (groups)
     (dolist (entry entries)
       (let* ((file (plist-get entry :file))
-             (group (assoc-string file groups)))
+             (annotation (plist-get entry :annotation))
+             (record (plist-get entry :record))
+             (revision (scholia-db--source-view
+                        annotation (scholia-db-record-annotations record)))
+             (key (list file revision))
+             (group (assoc key groups)))
         (unless group
-          (setq group (list file))
+          (setq group (list key))
           (setq groups (append groups (list group))))
         (setcdr group (append (cdr group) (list entry)))))
     groups))
 
+(defun scholia-status--insert-source (file revision annotations)
+  "Insert FILE at REVISION, falling back to ANNOTATIONS' saved source context."
+  (let ((source (and revision
+                     (scholia-locate--revision-buffer file revision))))
+    (unwind-protect
+        (if source
+            (insert-buffer-substring source)
+          (condition-case nil
+              (insert-file-contents file)
+            (error (insert (scholia-export--snapshot-source annotations)))))
+      (when source (kill-buffer source)))))
+
 (defun scholia-status--render-file (entries format)
-  "Render ENTRIES against its file's disk source or saved context using FORMAT."
+  "Render ENTRIES against their root source view using FORMAT."
   (let* ((file (plist-get (car entries) :file))
          (annotations (mapcar (lambda (entry) (plist-get entry :annotation))
-                              entries)))
+                              entries))
+         (record (plist-get (car entries) :record))
+         (revision (scholia-db--source-view
+                    (car annotations)
+                    (scholia-db-record-annotations record))))
     (with-temp-buffer
       (let ((buffer-file-name file))
-        (condition-case nil
-            (insert-file-contents file)
-          (error (insert (scholia-export--snapshot-source annotations))))
+        (scholia-status--insert-source file revision annotations)
         (delay-mode-hooks (set-auto-mode))
         (scholia-export-render annotations format file)))))
 

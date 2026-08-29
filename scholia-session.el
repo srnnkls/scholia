@@ -43,6 +43,37 @@
     (scholia-session--refuse "Not a session name: %S" name))
   name)
 
+(defun scholia-session--existing-file (name)
+  "Return the real session file NAME names, or signal."
+  (let ((file (scholia-session-file name)))
+    (unless (and (file-exists-p file) (scholia-db-session-file-p file))
+      (scholia-session--refuse "There is no session called %s" name))
+    file))
+
+(defun scholia-session--bindings ()
+  "Return the buffer-local session bindings currently in force."
+  (delq nil
+        (mapcar (lambda (buffer)
+                  (when (local-variable-p 'scholia-session buffer)
+                    (cons buffer (buffer-local-value 'scholia-session buffer))))
+                (buffer-list))))
+
+(defun scholia-session--restore-bindings (bindings)
+  "Restore the buffer-local session BINDINGS exactly."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (kill-local-variable 'scholia-session)))
+  (dolist (binding bindings)
+    (when (buffer-live-p (car binding))
+      (with-current-buffer (car binding)
+        (setq-local scholia-session (cdr binding))))))
+
+(defun scholia-session--restore-header (file header)
+  "Restore FILE's session HEADER."
+  (scholia-db--writing
+   file
+   (lambda (store) (scholia-store-put-session store header))))
+
 (defun scholia-session--session-file-p (name)
   "Return non-nil when NAME answers to a database carrying a session header.
 Reading the header is what tells a session apart from the other files
@@ -229,8 +260,7 @@ A NAME no session file answers to is refused: `scholia-session-create'
 makes a session, and a typo at the prompt must not mint one."
   (interactive (list (scholia-session--read-name "Switch to session: ")))
   (scholia-session--check-name name)
-  (unless (file-exists-p (scholia-session-file name))
-    (scholia-session--refuse "There is no session called %s" name))
+  (scholia-session--existing-file name)
   (let ((affected (scholia-session--buffers-of
                    (list (scholia-session-default-name) name))))
     (dolist (buffer affected)
@@ -259,19 +289,35 @@ them orphaned at a name nothing answers to."
                      (read-string "New name: ")))
   (scholia-session--check-name old)
   (scholia-session--check-name new)
-  (let ((source (scholia-session-file old))
-        (target (scholia-session-file new)))
-    (unless (file-exists-p source)
-      (scholia-session--refuse "There is no session called %s" old))
+  (let* ((source (scholia-session--existing-file old))
+         (target (scholia-session-file new))
+         (header (plist-get (scholia-db-interchange source) :session))
+         (default (default-value 'scholia-session))
+         (bindings (scholia-session--bindings))
+         (projects (copy-tree (default-value 'scholia-project-sessions)))
+         (cache (copy-tree scholia--assignment-cache))
+         (moved nil))
     (when (file-exists-p target)
       (scholia-session--refuse "A session called %s already exists" new))
     (dolist (buffer (scholia-session--buffers-of (list old)))
       (with-current-buffer buffer
         (scholia-save-annotations)))
-    (scholia-store-rename source target)
-    (scholia-db-set-session-name target new)
-    (scholia-session--rebind old new)
-    new))
+    (condition-case failure
+        (progn
+          (scholia-store-rename source target)
+          (setq moved t)
+          (scholia-db-set-session-name target new)
+          (scholia-session--rebind old new)
+          new)
+      (error
+       (when moved
+         (scholia-store-rename target source)
+         (scholia-session--restore-header source header))
+       (set-default 'scholia-session default)
+       (scholia-session--restore-bindings bindings)
+       (set-default 'scholia-project-sessions projects)
+       (setq scholia--assignment-cache cache)
+       (signal (car failure) (cdr failure))))))
 
 (defun scholia-session-delete (name &optional force)
   "Delete the session called NAME.
@@ -287,9 +333,7 @@ them for the next session of the same name to open."
   (interactive (list (scholia-session--read-name "Delete session: ")
                      current-prefix-arg))
   (scholia-session--check-name name)
-  (let ((file (scholia-session-file name)))
-    (unless (file-exists-p file)
-      (scholia-session--refuse "There is no session called %s" name))
+  (let ((file (scholia-session--existing-file name)))
     (when (and (not force) (scholia-session--buffers-of (list name)))
       (scholia-session--refuse "Buffers still annotate into %s" name))
     (scholia-store-delete file)
@@ -310,9 +354,7 @@ user named asks."
   (interactive (list (scholia-session--read-name "Export session: ")
                      (read-file-name "Write to: ")))
   (scholia-session--check-name name)
-  (let ((source (scholia-session-file name)))
-    (unless (file-exists-p source)
-      (scholia-session--refuse "There is no session called %s" name))
+  (let ((source (scholia-session--existing-file name)))
     (when (and (file-exists-p file)
                (not (yes-or-no-p (format "Replace %s? " file))))
       (scholia-session--refuse "Not replacing %s" file))

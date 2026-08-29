@@ -546,7 +546,7 @@ returning through a merge is for the merge path to answer."
             annotations)))
 
 (defun scholia-db-save (session-file file annotations checksum
-                                     &optional preserve additive)
+                                     &optional preserve additive source-view)
   "Store ANNOTATIONS of FILE with CHECKSUM into SESSION-FILE.
 Source context is snapshot from the current buffer, which is the one
 visiting FILE.  Fields an incoming annotation does not carry are taken
@@ -592,10 +592,34 @@ every other record where another writer left it."
    session-file
    (lambda (store)
      (scholia-db--fold store session-file file annotations checksum
-                       preserve additive))))
+                       preserve additive source-view))))
+
+(defun scholia-db--source-root (annotation annotations)
+  "Return the root ANNOTATION reaches in ANNOTATIONS."
+  (let ((root annotation)
+        (seen nil))
+    (while (and (scholia-db-annotation-reply-p root)
+                (not (member (scholia-db-annotation-id root) seen)))
+      (push (scholia-db-annotation-id root) seen)
+      (setq root
+            (seq-find
+             (lambda (candidate)
+               (equal (scholia-db-annotation-id candidate)
+                      (scholia-db-annotation-reply-to root)))
+             annotations)))
+    root))
+
+(defun scholia-db--source-view (annotation annotations)
+  "Return the revision source view ANNOTATION inherits in ANNOTATIONS."
+  (scholia-db-annotation-revision
+   (scholia-db--source-root annotation annotations)))
+
+(defun scholia-db--in-source-view-p (annotation annotations revision)
+  "Return non-nil when ANNOTATION belongs to REVISION in ANNOTATIONS."
+  (equal (scholia-db--source-view annotation annotations) revision))
 
 (defun scholia-db--fold (store session-file file annotations checksum preserve
-                                additive)
+                                additive source-view)
   "Fold ANNOTATIONS of FILE into the record STORE carries for it.
 SESSION-FILE names the session STORE was opened on, CHECKSUM
 fingerprints the buffer, PRESERVE holds stored annotations the caller could
@@ -603,7 +627,15 @@ not rebuild from it, and ADDITIVE preserves every stored annotation."
   (scholia-db--publish store session-file)
   (let* ((record (scholia-store-record store file))
          (stored (scholia-db-record-annotations record))
-         (preserve (if additive stored preserve))
+         (preserve (cond
+                    (additive stored)
+                    (source-view
+                     (seq-remove
+                      (lambda (annotation)
+                        (scholia-db--in-source-view-p annotation stored
+                                                      source-view))
+                      stored))
+                    (t preserve)))
          (checksum (if additive (scholia-db-record-checksum record) checksum))
          (snapshots (mapcar (lambda (annotation)
                               (scholia-db--carry-forward
@@ -612,11 +644,18 @@ not rebuild from it, and ADDITIVE preserves every stored annotation."
          (placed (seq-remove #'scholia-db-annotation-reply-p snapshots))
          (made (seq-filter #'scholia-db-annotation-reply-p snapshots))
          (ids (mapcar #'scholia-db-annotation-id snapshots))
+         (roots (mapcar #'scholia-db-annotation-id placed))
          (replies (seq-filter
                    (lambda (annotation)
                      (and (scholia-db-annotation-reply-p annotation)
                           (not (member (scholia-db-annotation-id annotation)
-                                       ids))))
+                                       ids))
+                          (or (not source-view)
+                              (member
+                               (scholia-db-annotation-id
+                                (scholia-db--source-root
+                                 annotation (append placed stored)))
+                               roots))))
                    stored))
          (carried (append ids (mapcar #'scholia-db-annotation-id replies)))
          (unplaced (seq-remove

@@ -32,6 +32,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'sqlite)
 (require 'scholia-vars)
 
@@ -87,11 +88,47 @@ no export can carry."
 
 (defun scholia-store--parse (text)
   "Return the value the row text TEXT carries."
-  (let ((read-circle nil))
+  (let ((read-circle nil)
+        (read-eval nil))
     (car (read-from-string text))))
 
 
 ;;;; The file on disk
+
+(defvar scholia-store--locked-files nil
+  "Session files this Emacs has locked for lifecycle publication.")
+
+(defun scholia-store--lock-file (file)
+  "Lock FILE until the caller releases it."
+  (let ((locked nil))
+    (while (not locked)
+      (if (file-locked-p file)
+          (sleep-for 0.01)
+        (let ((create-lockfiles t))
+          (if (catch 'scholia-store-locked
+                (cl-letf (((symbol-function 'ask-user-about-lock)
+                           (lambda (&rest _)
+                             (throw 'scholia-store-locked nil))))
+                  (lock-file file)
+                  t))
+              (setq locked t)
+            (sleep-for 0.01)))))))
+
+(defun scholia-store--with-locks (files function)
+  "Call FUNCTION while holding native locks on FILES."
+  (let ((files (sort (delete-dups (mapcar #'expand-file-name files)) #'string<))
+        (claimed nil))
+    (unwind-protect
+        (progn
+          (dolist (file files)
+            (unless (member file scholia-store--locked-files)
+              (scholia-store--lock-file file)
+              (push file claimed)))
+          (let ((scholia-store--locked-files
+                 (append claimed scholia-store--locked-files)))
+            (funcall function)))
+      (dolist (file claimed)
+        (unlock-file file)))))
 
 (defun scholia-store--journals (session-file)
   "Return the journal paths beside SESSION-FILE.
@@ -148,12 +185,14 @@ hand the accessors a list they never return from."
   (let ((db (with-temp-buffer
               (insert-file-contents session-file)
               (goto-char (point-min))
-              (let ((read-circle nil))
+              (let ((read-circle nil)
+                    (read-eval nil))
                 (condition-case nil
                     (read (current-buffer))
                   (error
                    (signal 'scholia-db-format-error (list session-file))))))))
-    (unless (and (plistp db) (plist-get db :scholia))
+    (unless (and (plistp db)
+                 (eq (plist-get db :scholia) scholia-store-format-version))
       (signal 'scholia-db-format-error (list session-file)))
     db))
 
@@ -346,9 +385,12 @@ merely points at is read through `scholia-store-read-interchange',
 which leaves it as it found it."
   (let ((file (expand-file-name session-file)))
     (make-directory (file-name-directory file) t)
-    (when (scholia-store-interchange-p file)
-      (scholia-store--migrate file))
-    (scholia-store--open-database file)))
+    (scholia-store--with-locks
+     (list file)
+     (lambda ()
+       (when (scholia-store-interchange-p file)
+         (scholia-store--migrate file))
+       (scholia-store--open-database file)))))
 
 (defun scholia-store--sweep-journals (connection file)
   "Take the journals beside FILE out, with CONNECTION alone on the database.
@@ -678,12 +720,25 @@ at the path and nothing at the aside."
                 ((not (file-exists-p session-file))
                  (rename-file aside session-file t))))))))
 
+(defun scholia-store--release-file (session-file)
+  "Close SESSION-FILE once and refuse it while a journal survives."
+  (when (scholia-store--database-p session-file)
+    (scholia-store-close (scholia-store-open session-file))
+    (when (seq-some #'file-exists-p (scholia-store--journals session-file))
+      (signal 'scholia-error
+              (list (format "Another connection still holds %s"
+                            session-file))))))
+
 (defun scholia-store-delete (session-file)
   "Delete the database SESSION-FILE and the journals beside it.
 Unlinking the database alone orphans them, and the next store made at
-the same path then either fails to open or comes back holding what the
+that path then either fails to open or comes back holding what the
 deleted one held."
-  (scholia-store--discard session-file))
+  (scholia-store--with-locks
+   (list session-file)
+   (lambda ()
+     (scholia-store--release-file session-file)
+     (scholia-store--discard session-file))))
 
 (defun scholia-store-rename (old new)
   "Move the database OLD to NEW, leaving nothing of OLD behind.
@@ -693,13 +748,12 @@ journal is left pointing at a name that is gone.  A log surviving that
 close is another connection holding OLD open: the move is refused and
 OLD left whole, since `rename-file' moves the database alone and the
 commits still in the log would go with the journals behind it."
-  (when (scholia-store--database-p old)
-    (scholia-store-close (scholia-store-open old))
-    (when (file-exists-p (car (scholia-store--journals old)))
-      (signal 'scholia-error
-              (list (format "Another connection still holds %s" old)))))
-  (rename-file old new)
-  (scholia-store--discard old))
+  (scholia-store--with-locks
+   (list old new)
+   (lambda ()
+     (scholia-store--release-file old)
+     (rename-file old new)
+     (scholia-store--discard old))))
 
 (provide 'scholia-store)
 ;;; scholia-store.el ends here

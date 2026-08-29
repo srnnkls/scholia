@@ -520,6 +520,34 @@ one of them."
      (mapcar (lambda (file) (scholia-store-record store file))
              (sort (copy-sequence (scholia-store-files store)) #'string<)))))
 
+(defun scholia-export--source-views (record)
+  "Return RECORD's annotations grouped by their root source view."
+  (let ((annotations (scholia-db-record-annotations record))
+        (groups nil))
+    (dolist (annotation annotations)
+      (let* ((revision (scholia-db--source-view annotation annotations))
+             (group (assoc revision groups)))
+        (if group
+            (setcdr group (append (cdr group) (list annotation)))
+          (setq groups (append groups (list (list revision annotation)))))))
+    groups))
+
+(defun scholia-export--revision-source (file revision cache)
+  "Return FILE at REVISION from CACHE, or `missing'."
+  (let* ((key (list file revision))
+         (source (gethash key cache :unread)))
+    (if (eq source :unread)
+        (puthash
+         key
+         (let ((buffer (scholia-locate--revision-buffer file revision)))
+           (if buffer
+               (unwind-protect
+                   (with-current-buffer buffer (buffer-string))
+                 (kill-buffer buffer))
+             'missing))
+         cache)
+      source)))
+
 (defun scholia-export--session-record (record cache format)
   "Render RECORD using CACHE and FORMAT."
   (let* ((file (scholia-db-record-file record))
@@ -530,26 +558,44 @@ one of them."
              (let ((buffer-file-name file))
                (insert text)
                (delay-mode-hooks (set-auto-mode))
-               (scholia-export-render annotations format file)))))
-      (if (eq source 'missing)
-          (let ((annotations
-                 (mapcar #'scholia-export--stale
-                         (scholia-db-record-annotations record))))
-            (render annotations (scholia-export--snapshot-source annotations)))
-        (with-temp-buffer
-          (let ((buffer-file-name file))
-            (insert source)
-            (delay-mode-hooks (set-auto-mode))
-            (pcase-let ((`(,live . ,stale)
-                         (scholia-export--source-groups record)))
-              (string-join
-               (delq nil
-                     (list (and live (scholia-export-render live format file))
-                           (and stale
-                                (render stale
-                                        (scholia-export--snapshot-source
-                                         stale)))))
-               "\n\n"))))))))
+               (scholia-export-render annotations format file))))
+         (render-disk (annotations)
+           (if (eq source 'missing)
+               (let ((annotations
+                      (mapcar #'scholia-export--stale annotations)))
+                 (render annotations
+                         (scholia-export--snapshot-source annotations)))
+             (with-temp-buffer
+               (let ((buffer-file-name file)
+                     (view (scholia-db-make-record
+                            file annotations
+                            (scholia-db-record-checksum record))))
+                 (insert source)
+                 (delay-mode-hooks (set-auto-mode))
+                 (pcase-let ((`(,live . ,stale)
+                              (scholia-export--source-groups view)))
+                   (string-join
+                    (delq nil
+                          (list (and live
+                                     (scholia-export-render live format file))
+                                (and stale
+                                     (render stale
+                                             (scholia-export--snapshot-source
+                                              stale)))))
+                    "\n\n")))))))
+      (string-join
+       (mapcar
+        (lambda (view)
+          (let* ((revision (car view))
+                 (annotations (cdr view))
+                 (committed (and revision
+                                 (scholia-export--revision-source
+                                  file revision cache))))
+            (if (and committed (not (eq committed 'missing)))
+                (render annotations committed)
+              (render-disk annotations))))
+        (scholia-export--source-views record))
+       "\n\n"))))
 
 (defun scholia-export--session-payload (sessions format)
   "Return SESSIONS rendered in session and file order as FORMAT."

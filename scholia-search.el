@@ -81,7 +81,11 @@ Replies follow their `:reply-to' parents in the same record to a position."
                  (equal (scholia-db-annotation-reply-to annotation)
                         (scholia-db-annotation-id candidate)))
                annotations))))
-    (unless (and annotation (scholia-db-annotation-beg annotation))
+    (unless annotation
+      (user-error "Annotation has no stored position"))
+    (setq annotation
+          (scholia-locate-materialize (plist-get entry :file) annotation))
+    (unless (scholia-db-annotation-beg annotation)
       (user-error "Annotation has no stored position"))
     annotation))
 

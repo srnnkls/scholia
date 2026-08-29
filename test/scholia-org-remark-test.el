@@ -528,5 +528,39 @@ one `org-remark-source-get-file-name' produces."
               (with-current-buffer buffer (set-buffer-modified-p nil))
               (kill-buffer buffer))))))))
 
+(ert-deftest scholia-org-remark-export-materializes-revision-locations-from-committed-source ()
+  "A revision location resolves its bounds against its own committed bytes."
+  (scholia-org-remark-test--with-sources directory
+    (scholia-test-with-session-directory
+      (let* ((aaa (expand-file-name "aaa.txt" directory))
+             (revision nil)
+             (annotation (scholia-db-make-annotation
+                          "id-materialized" "revision note" nil nil "delta")))
+        (should (zerop (process-file "git" nil nil nil "-C" directory "init" "-q")))
+        (should (zerop (process-file "git" nil nil nil "-C" directory "config"
+                                    "user.email" "test@example.invalid")))
+        (should (zerop (process-file "git" nil nil nil "-C" directory "config"
+                                    "user.name" "Scholia Test")))
+        (should (zerop (process-file "git" nil nil nil "-C" directory "add" "aaa.txt")))
+        (should (zerop (process-file "git" nil nil nil "-C" directory "commit" "-q"
+                                    "-m" "revision fixture")))
+        (setq revision
+              (with-temp-buffer
+                (should (zerop (process-file "git" nil (current-buffer) nil "-C"
+                                             directory "rev-parse" "HEAD")))
+                (string-trim (buffer-string))))
+        (with-temp-file aaa
+          (insert "working tree only\n"))
+        (plist-put annotation :line 2)
+        (plist-put annotation :column 10)
+        (plist-put annotation :end-column 15)
+        (plist-put annotation :revision revision)
+        (scholia-org-remark-test--session
+         "work" (list (scholia-org-remark-test--record aaa (list annotation))))
+        (let ((outline (scholia-org-remark-test--outline
+                        (scholia-org-remark-export "work"))))
+          (should (equal (nthcdr 2 (nth 1 outline))
+                         '("id-materialized" "22" "27"))))))))
+
 (provide 'scholia-org-remark-test)
 ;;; scholia-org-remark-test.el ends here

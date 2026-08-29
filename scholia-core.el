@@ -197,20 +197,22 @@ draw on."
                        'scholia-location-functions
                        (scholia-db-annotation-beg annotation))))
         (if-let ((file (plist-get location :file)))
-            (let* ((group (or (assoc file groups)
-                              (car (push (list file) groups))))
-                   (fields (copy-sequence location)))
+            (let* ((fields (copy-sequence location)))
               (when (and (scholia-db-annotation-revision annotation)
                          (not (plist-get fields :revision)))
                 (cl-remf fields :revision))
               (cl-remf fields :file)
               (setq annotation
                     (apply #'scholia-db--with-fields annotation fields))
-              (when (or (not (equal file (scholia-buffer-file)))
-                        (scholia-db-annotation-revision annotation))
-                (setq annotation
-                      (scholia-db-annotation-set-bounds annotation nil nil)))
-              (setcdr group (cons annotation (cdr group))))
+              (let* ((source-view
+                      (list file (scholia-db-annotation-revision annotation)))
+                     (group (or (assoc source-view groups)
+                                (car (push (list source-view) groups)))))
+                (when (or (not (equal file (scholia-buffer-file)))
+                          (scholia-db-annotation-revision annotation))
+                  (setq annotation
+                        (scholia-db-annotation-set-bounds annotation nil nil)))
+                (setcdr group (cons annotation (cdr group)))))
           (push annotation unresolved))))
     (if unresolved
         (scholia-core--report
@@ -219,7 +221,9 @@ draw on."
       (unless groups
         (when-let ((location (run-hook-with-args-until-success
                               'scholia-location-functions (point-min))))
-          (push (list (plist-get location :file)) groups)))
+          (push (list (list (plist-get location :file)
+                            (plist-get location :revision)))
+                groups)))
       (dolist (reply replies)
         (let ((group
                (or (seq-find
@@ -237,17 +241,17 @@ draw on."
           "Annotations can not be saved: no location resolver claimed buffer %S"
            (buffer-name))
         (dolist (group groups)
-          (let* ((file (car group))
-                 (additive (or (not (equal file (scholia-buffer-file)))
-                               (seq-some #'scholia-db-annotation-revision
-                                         (cdr group))))
+          (let* ((source-view (car group))
+                 (file (car source-view))
+                 (revision (cadr source-view))
+                 (additive (not (equal file (scholia-buffer-file))))
                  (located (append (nreverse (cdr group))
                                   (and (equal file (scholia-buffer-file))
                                        scholia--hidden-revision-annotations))))
             (scholia-db-save (scholia-session-file) file located
                              (scholia-buffer-checksum)
                              (unless additive scholia--unplaced-annotations)
-                             additive)))))))
+                             additive revision)))))))
 
 (defun scholia-save-annotations ()
   "Store the annotations of this buffer into its session.

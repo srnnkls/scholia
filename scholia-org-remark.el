@@ -82,7 +82,10 @@
           ":END:\n"
           (mapconcat
            (lambda (record)
-             (let ((annotations (scholia-db-record-annotations record)))
+             (let ((annotations
+                    (mapcar (lambda (annotation)
+                              (scholia-locate-materialize file annotation))
+                            (scholia-db-record-annotations record))))
                (mapconcat
                 (lambda (annotation)
                   (scholia-org-remark--annotation annotation annotations))

@@ -60,12 +60,54 @@ Each function receives a position and returns a location plist or nil.")
                 (set-buffer-modified-p nil))
               buffer)))))))
 
+(defun scholia-locate--materialize (annotation)
+  "Return ANNOTATION with its line and columns turned into bounds."
+  (if (or (scholia-db-annotation-reply-p annotation)
+          (scholia-db-annotation-beg annotation))
+      annotation
+    (save-restriction
+      (widen)
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (1- (scholia-db-annotation-line annotation)))
+        (let ((bol (line-beginning-position)))
+          (scholia-db-annotation-set-bounds
+           annotation
+           (+ bol (scholia-db-annotation-column annotation))
+           (+ bol (scholia-db-annotation-end-column annotation))))))))
+
+(defun scholia-locate-materialize (file annotation)
+  "Return ANNOTATION with bounds resolved against its source view of FILE."
+  (if (or (scholia-db-annotation-reply-p annotation)
+          (scholia-db-annotation-beg annotation))
+      annotation
+    (let* ((revision (scholia-locate-revision annotation))
+           (buffer (or (and revision
+                            (scholia-locate--revision-buffer file revision))
+                       (let ((source (generate-new-buffer " *scholia-source*")))
+                         (with-current-buffer source
+                           (insert-file-contents file))
+                         source))))
+      (unwind-protect
+          (condition-case nil
+              (with-current-buffer buffer
+                (scholia-locate--materialize annotation))
+            (error annotation))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (defun scholia-locate-open (file annotation)
   "Open FILE at ANNOTATION's stored location."
   (let ((revision (scholia-locate-revision annotation)))
     (if-let ((buffer (and revision
                           (scholia-locate--revision-buffer file revision))))
-        (progn
+        (let ((annotation
+               (condition-case nil
+                   (with-current-buffer buffer
+                     (scholia-locate--materialize annotation))
+                 (error annotation))))
+          (unless (scholia-db-annotation-beg annotation)
+            (user-error "Annotation has no stored position"))
           (switch-to-buffer buffer)
           (goto-char (scholia-db-annotation-beg annotation)))
       (find-file file)
@@ -74,6 +116,9 @@ Each function receives a position and returns a location plist or nil.")
             (goto-char (point-min))
             (message "Could not read %s at revision %s; opened working tree"
                      file revision))
+        (setq annotation (scholia-locate-materialize file annotation))
+        (unless (scholia-db-annotation-beg annotation)
+          (user-error "Annotation has no stored position"))
         (goto-char (scholia-db-annotation-beg annotation))))))
 
 (provide 'scholia-locate)

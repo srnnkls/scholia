@@ -16,6 +16,9 @@
 
 ;;; Code:
 
+(defvar read-eval t
+  "Whether persisted Lisp forms may evaluate while being read.")
+
 (declare-function scholia-annotate "scholia-core")
 (declare-function scholia-delete-annotation "scholia-core")
 (declare-function scholia-reply-to "scholia-core")
@@ -95,7 +98,8 @@ file, and answer before the stored ones."
     (with-temp-buffer
       (insert-file-contents scholia-session-state-file)
       (condition-case nil
-          (let ((stored (read (current-buffer))))
+          (let ((read-eval nil)
+                (stored (read (current-buffer))))
             (and (listp stored) stored))
         (error nil)))))
 

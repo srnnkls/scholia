@@ -726,5 +726,72 @@ comes back holding the deleted session's annotations verbatim."
         (scholia-store-close store)))
     (should-not (scholia-session-test--journals))))
 
+(ert-deftest scholia-session-existing-transitions-refuse-foreign-files-and-rename-rolls-back ()
+  "Foreign names stay untouched, and a failed rename restores its route."
+  (scholia-session-test--with-state
+    (let ((foreign (scholia-session-file "foreign"))
+          (exported (expand-file-name "foreign-export.eld" scholia-session-directory)))
+      (set-default 'scholia-session "route")
+      (scholia-session-create "route")
+      (with-temp-file foreign
+        (insert "foreign session\n"))
+      (let ((route (default-value 'scholia-session))
+            (assignments (copy-tree scholia-project-sessions)))
+        (dolist (transition
+                 (list (lambda () (scholia-session-switch "foreign"))
+                       (lambda () (scholia-session-rename "foreign" "moved"))
+                       (lambda () (scholia-session-delete "foreign"))
+                       (lambda () (scholia-session-export "foreign" exported))))
+          (should-error (funcall transition) :type 'scholia-error)
+          (should (equal (default-value 'scholia-session) route))
+          (should (equal scholia-project-sessions assignments))))
+      (should (file-exists-p foreign))
+      (should-not (file-exists-p (scholia-session-file "moved")))
+      (should-not (file-exists-p exported)))
+    (let* ((root (file-name-as-directory (make-temp-file "scholia-root-" t)))
+           (scholia--assignment-cache nil)
+           (live (generate-new-buffer " *scholia-session-alpha*"))
+           (old-state nil)
+           (assignment-cache nil))
+      (unwind-protect
+          (progn
+            (set-default 'scholia-project-root-function (lambda () root))
+            (set-default 'scholia-session "alpha")
+            (scholia-session-create "alpha")
+            (with-current-buffer live
+              (setq-local scholia-session "alpha"))
+            (with-temp-buffer
+              (scholia-session-assign-project "alpha"))
+            (should scholia--assignment-cache)
+            (setq assignment-cache (copy-tree scholia--assignment-cache))
+            (setq old-state
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally scholia-session-state-file)
+                    (buffer-string)))
+            (cl-letf (((symbol-function 'write-region)
+                       (lambda (&rest _) (error "assignment write failed"))))
+              (should-error (scholia-session-rename "alpha" "omega")))
+            (should (file-exists-p (scholia-session-file "alpha")))
+            (should-not (file-exists-p (scholia-session-file "omega")))
+            (should (equal (scholia-db-session-name
+                            (scholia-session-file "alpha"))
+                           "alpha"))
+            (should (equal (default-value 'scholia-session) "alpha"))
+            (should (buffer-live-p live))
+            (with-current-buffer live
+              (should (equal scholia-session "alpha")))
+            (should (equal scholia--assignment-cache assignment-cache))
+            (should (equal scholia-project-sessions (list (cons root "alpha"))))
+            (should (equal (with-temp-buffer
+                             (set-buffer-multibyte nil)
+                             (insert-file-contents-literally
+                              scholia-session-state-file)
+                             (buffer-string))
+                           old-state)))
+        (when (buffer-live-p live)
+          (kill-buffer live))
+        (delete-directory root t)))))
+
 (provide 'scholia-session-test)
 ;;; scholia-session-test.el ends here

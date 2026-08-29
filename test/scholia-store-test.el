@@ -866,5 +866,78 @@ the caller as that same type error instead of as a format error."
         (should-error (scholia-db-files session) :type 'sqlite-error))
       (should (equal (scholia-db-record session file) record)))))
 
+(ert-deftest scholia-store-rename-keeps-a-subprocess-from-opening-the-old-path ()
+  "An opener cannot enter at the old-to-new rename boundary."
+  (scholia-test-with-session-directory
+    (scholia-store-test--with-flags (opened)
+      (let* ((old (scholia-store-test--session-file "race-old"))
+             (new (scholia-store-test--session-file "race-new"))
+             (rename (symbol-function 'rename-file))
+             (writer nil))
+        (scholia-db-create-session old)
+        (unwind-protect
+            (cl-letf (((symbol-function 'rename-file)
+                       (lambda (source target &optional overwrite)
+                         (if (and (equal source old) (equal target new))
+                             (progn
+                               (setq writer
+                                     (scholia-store-test--start
+                                      `(let ((store (scholia-store-open ,old)))
+                                         (unwind-protect
+                                             (progn
+                                               (write-region "" nil ,opened nil 'silent)
+                                               (sleep-for 300))
+                                           (scholia-store-close store)))))
+                               (scholia-store-test--await-ready writer)
+                               (sleep-for 0.1)
+                               (should-not (file-exists-p opened))
+                               (funcall rename source target overwrite))
+                           (funcall rename source target overwrite)))))
+              (scholia-store-rename old new))
+          (when (and writer (process-live-p writer))
+            (scholia-store-test--kill writer)))))))
+
+(ert-deftest scholia-store-rejects-evaluating-or-unknown-interchange ()
+  "Persisted readers neither evaluate forms nor accept another schema."
+  (scholia-test-with-session-directory
+    (let ((hostile (scholia-store-test--session-file "hostile"))
+          (unknown (scholia-store-test--session-file "unknown"))
+          (row "(:id \"benign\")")
+          (hostile-row "#.(set 'scholia-store-test--read-eval-sentinel t)\n")
+          (assignments (expand-file-name "assignments.eld"
+                                         scholia-session-directory))
+          (sentinel 'scholia-store-test--read-eval-sentinel))
+      (unwind-protect
+          (progn
+            (set sentinel nil)
+            (with-temp-file hostile
+              (insert "#.(set 'scholia-store-test--read-eval-sentinel t)\n"))
+            (with-temp-file unknown
+              (insert "(:scholia 999 :records nil :session nil)\n"))
+            (with-temp-file assignments
+              (insert "#.(set 'scholia-store-test--read-eval-sentinel t)\n"))
+            (should-error (scholia-store-read-interchange hostile)
+                          :type 'scholia-db-format-error)
+            (should-not (symbol-value sentinel))
+            (let ((original (symbol-function 'read-from-string))
+                  (observed t))
+              (let ((read-eval t))
+                (cl-letf (((symbol-function 'read-from-string)
+                           (lambda (&rest arguments)
+                             (setq observed read-eval)
+                             (apply original arguments))))
+                  (scholia-store--parse row)))
+              (should-not observed))
+            (let ((read-eval t))
+              (should-error (scholia-store--parse hostile-row)))
+            (should-not (symbol-value sentinel))
+            (let ((scholia-session-state-file assignments)
+                  (scholia-project-sessions nil))
+              (scholia-session-load-assignments))
+            (should-not (symbol-value sentinel))
+            (should-error (scholia-store-read-interchange unknown)
+                          :type 'scholia-db-format-error))
+        (makunbound sentinel)))))
+
 (provide 'scholia-store-test)
 ;;; scholia-store-test.el ends here
