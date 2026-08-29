@@ -180,6 +180,22 @@ taken and `scholia-session-switch' opens all at once."
      session-file
      (lambda (store) (scholia-store-remove-record store file)))))
 
+(defun scholia-db-remove-annotation (session-file file id)
+  "Remove annotation ID from FILE in SESSION-FILE."
+  (when (scholia-db--present-p session-file)
+    (scholia-db--writing
+     session-file
+     (lambda (store)
+       (when-let ((record (scholia-store-record store file)))
+         (scholia-store-put-record
+          store
+          (scholia-db-make-record
+           file
+           (seq-remove (lambda (annotation)
+                         (equal id (scholia-db-annotation-id annotation)))
+                       (scholia-db-record-annotations record))
+           (scholia-db-record-checksum record))))))))
+
 (defun scholia-db-add-reply (session-file file reply)
   "Append REPLY to the record FILE keys in SESSION-FILE.
 One annotation is added to one record: every other annotation of that
