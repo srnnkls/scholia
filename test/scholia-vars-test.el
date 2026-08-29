@@ -82,7 +82,8 @@ streams in the report."
                     :bindings (and (keymapp registered)
                                    (mapcar (lambda (key)
                                              (cons key (keymap-lookup registered key)))
-                                           '("C-c C-a" "C-c C-d" "C-c C-r" "C-c C-s")))))))
+                                           '("C-c C-a" "C-c C-d" "C-c C-r" "C-c C-s"
+                                             "C-c C-e" "C-c C-f" "C-c C-n" "C-c C-p")))))))
   "Form reporting the keymap `scholia-mode' registers.
 Reported for a probe loading the leaf on its own.")
 
@@ -96,7 +97,11 @@ Reported for a probe loading the leaf on its own.")
                    :bindings (("C-c C-a" . scholia-annotate)
                               ("C-c C-d" . scholia-delete-annotation)
                               ("C-c C-r" . scholia-reply-to)
-                              ("C-c C-s" . scholia-status))))))
+                              ("C-c C-s" . scholia-status)
+                              ("C-c C-e" . scholia-export)
+                              ("C-c C-f" . scholia-search)
+                              ("C-c C-n" . scholia-goto-next-annotation)
+                              ("C-c C-p" . scholia-goto-previous-annotation))))))
 
 (ert-deftest scholia-vars-byte-compiles-standalone-with-warnings-as-errors ()
   (let ((source (scholia-test-project-file "scholia-vars.el")))
