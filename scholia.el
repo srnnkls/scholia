@@ -16,8 +16,9 @@
 ;; Annotate a file without changing it, group the annotations into named
 ;; sessions, and send them where the work happens.
 ;;
-;; Based on annotate.el by Bastian Bechtold and contributors, from which
-;; scholia takes its annotation engine.  See LICENSE.
+;; annotate.el by Bastian Bechtold and contributors is prior art.  Its source
+;; informed edge cases covered by scholia's tests; no annotate.el code is copied
+;; or retained here.  See LICENSE.
 
 ;;; Code:
 

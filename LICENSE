@@ -2,11 +2,9 @@ The MIT License (MIT)
 
 Copyright (C) 2026 Sören Nikolaus
 
-scholia is derived from annotate.el, which carries the same license:
-
-Copyright (C) 2015 Bastian Bechtold and contributors:
-Naoya Yamashita (2018)
-Universita' degli Studi di Palermo (2019)
+annotate.el by Bastian Bechtold and contributors is prior art for scholia. Its source informed
+edge cases covered by scholia's tests; no annotate.el code is copied or retained in scholia, and
+annotate.el does not supply scholia's license.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
