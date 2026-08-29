@@ -19,6 +19,7 @@
 (require 'seq)
 (require 'scholia-core)
 (require 'scholia-db)
+(require 'scholia-locate)
 (require 'scholia-session)
 (require 'scholia-thread)
 
@@ -59,17 +60,19 @@
 
 (defun scholia-org-remark--annotation (annotation annotations)
   "Return ANNOTATION as an org-remark headline from ANNOTATIONS."
-  (concat "** " (scholia-db-annotation-id annotation) "\n"
-          ":PROPERTIES:\n"
-          ":org-remark-id: " (scholia-db-annotation-id annotation) "\n"
-          ":org-remark-beg: "
-          (number-to-string (scholia-db-annotation-beg annotation)) "\n"
-          ":org-remark-end: "
-          (number-to-string (scholia-db-annotation-end annotation)) "\n"
-          ":END:\n"
-          (scholia-org-remark--text
-           (scholia-db-annotation-text annotation))
-          (scholia-org-remark--reply-text annotation annotations 1) "\n"))
+  (let ((revision (scholia-locate-revision annotation)))
+    (concat "** " (scholia-db-annotation-id annotation) "\n"
+            ":PROPERTIES:\n"
+            ":org-remark-id: " (scholia-db-annotation-id annotation) "\n"
+            ":org-remark-beg: "
+            (number-to-string (scholia-db-annotation-beg annotation)) "\n"
+            ":org-remark-end: "
+            (number-to-string (scholia-db-annotation-end annotation)) "\n"
+            (if revision (concat ":scholia-revision: " revision "\n") "")
+            ":END:\n"
+            (scholia-org-remark--text
+             (scholia-db-annotation-text annotation))
+            (scholia-org-remark--reply-text annotation annotations 1) "\n")))
 
 (defun scholia-org-remark--file (file records)
   "Return FILE and its positioned RECORDS as org-remark headings."

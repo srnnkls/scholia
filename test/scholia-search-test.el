@@ -418,6 +418,66 @@ sends the reader to a place nobody annotated."
                                  #'string<))))
         (scholia-search-test--forget file)))))
 
+(ert-deftest scholia-search-and-status-open-revision-records-and-degrade-safely ()
+  "Search and status share revision-aware opening rather than stored offsets."
+  (scholia-search-test--with-state
+    (let* ((file (scholia-search-test--source
+                  "revision.txt" "before\nrevision target\n"))
+           (directory (file-name-directory file))
+           (revision nil)
+           (annotation (scholia-search-test--annotation
+                        "revision-id" "revision note" "revision" 8 16)))
+      (should (zerop (process-file "git" nil nil nil "-C" directory "init" "-q")))
+      (should (zerop (process-file "git" nil nil nil "-C" directory "config"
+                                  "user.email" "test@example.invalid")))
+      (should (zerop (process-file "git" nil nil nil "-C" directory "config"
+                                  "user.name" "Scholia Test")))
+      (should (zerop (process-file "git" nil nil nil "-C" directory "add"
+                                  (file-name-nondirectory file))))
+      (should (zerop (process-file "git" nil nil nil "-C" directory "commit" "-q"
+                                  "-m" "revision fixture")))
+      (setq revision
+            (with-temp-buffer
+              (should (zerop (process-file "git" nil (current-buffer) nil "-C"
+                                           directory "rev-parse" "HEAD")))
+              (string-trim (buffer-string))))
+      (with-temp-file file
+        (insert "before\nworking tree line\nrevision target\n"))
+      (plist-put annotation :revision revision)
+      (scholia-search-test--seed "revision" file (list annotation))
+      (let ((entry (car (scholia-search-annotations)))
+            (status-loaded (featurep 'scholia-status)))
+        (unwind-protect
+            (progn
+              (scholia-search--jump entry)
+              (should (equal (buffer-string) "before\nrevision target\n"))
+              (should (= (point) 8))
+              (let ((revision-buffer (current-buffer)))
+                (with-current-buffer revision-buffer (set-buffer-modified-p nil))
+                (kill-buffer revision-buffer))
+              (require 'scholia-status)
+              (scholia-status-jump entry)
+              (should (equal (buffer-string) "before\nrevision target\n"))
+              (should (= (point) 8))
+              (let ((revision-buffer (current-buffer)))
+                (with-current-buffer revision-buffer (set-buffer-modified-p nil))
+                (kill-buffer revision-buffer))
+              (plist-put (plist-get entry :annotation) :revision (make-string 40 ?0))
+              (let (messages)
+                (cl-letf (((symbol-function 'message)
+                           (lambda (format &rest arguments)
+                             (push (apply #'format-message format arguments) messages))))
+                  (scholia-search--jump entry))
+                (should (equal (buffer-string)
+                               "before\nworking tree line\nrevision target\n"))
+                (should (= (point) (point-min)))
+                (should (seq-some (lambda (message)
+                                    (string-match-p "working tree" message))
+                                  messages))))
+          (scholia-search-test--forget file)
+          (unless status-loaded
+            (unload-feature 'scholia-status t)))))))
+
 (ert-deftest scholia-search-reads-each-session-through-one-snapshot ()
   "The walk opens one read snapshot per session and keeps full values."
   (scholia-search-test--with-state

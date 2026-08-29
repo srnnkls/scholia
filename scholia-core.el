@@ -361,22 +361,35 @@ render did not reach is reported by name and kept in the record."
   (scholia-core--fall-back-to-default)
   (add-hook 'kill-buffer-hook #'scholia-core--save-on-kill nil t)
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
-  (let ((file (scholia-buffer-file)))
+  (let* ((location (run-hook-with-args-until-success
+                    'scholia-location-functions (point-min)))
+         (file (plist-get location :file))
+         (revision (plist-get location :revision)))
     (when (and file (not (scholia-buffer-chains)))
       (let* ((record (scholia-db-record (scholia-session-file) file))
              (annotations (seq-remove #'scholia-db-annotation-reply-p
                                       (scholia-db-record-annotations record)))
-             (hidden (and (not scholia-show-revision-annotations)
+             (hidden (and (not revision)
+                          (not scholia-show-revision-annotations)
                           (seq-filter #'scholia-db-annotation-revision
                                       annotations)))
-             (visible (seq-difference annotations hidden)))
+             (visible (if revision
+                          (seq-filter (lambda (annotation)
+                                        (equal (scholia-db-annotation-revision
+                                                annotation)
+                                               revision))
+                                      annotations)
+                        (seq-difference annotations hidden)))
+             (checksum (scholia-buffer-checksum)))
         (setq scholia--hidden-revision-annotations hidden
               scholia--unplaced-annotations visible)
         (scholia-core--restore-placed
          (scholia-db-buffer-annotations
           (scholia-db-make-record file visible
-                                  (scholia-db-record-checksum record))
-          (scholia-buffer-checksum)))
+                                  (if revision
+                                      checksum
+                                    (scholia-db-record-checksum record)))
+          checksum))
         (when hidden
           (scholia-core--report
            (concat "%d revision annotations hidden; set "

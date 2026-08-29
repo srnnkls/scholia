@@ -20,6 +20,7 @@
 (require 'scholia-db)
 (require 'scholia-export)
 (require 'scholia-filter)
+(require 'scholia-locate)
 (require 'scholia-search)
 (require 'scholia-session)
 (require 'scholia-thread)
@@ -137,6 +138,10 @@
                  (magit-insert-section (hunk annotation)
                    (insert (make-string (* depth 2) ?\s))
                    (insert (scholia-db-annotation-text annotation)
+                           (if-let ((revision
+                                     (scholia-locate-revision annotation)))
+                               (format " [%s]" revision)
+                             "")
                            "\n")))))))))))
 
 (defun scholia-status--render (query)

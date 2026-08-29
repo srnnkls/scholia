@@ -692,6 +692,43 @@ sorted globally reads f1 f2 f3 f4."
           (should (string-match-p "3 | epsilon zeta" output))
           (should (string-match-p "lost note (stale)" output)))))))
 
+(ert-deftest scholia-export-consumers-render-the-stored-revision ()
+  "Export, Org, status, and search retain a revision annotation's identity."
+  (scholia-test-with-session-directory
+    (scholia-export-test--with-directory directory
+      (let* ((file (scholia-export-test--write directory "revision.txt"
+                                                scholia-export-test--source))
+             (revision "0123456789abcdef0123456789abcdef01234567")
+             (annotation (scholia-export-test--annotation "revision-id"
+                                                           "revision note"))
+             (record nil))
+        (plist-put annotation :revision revision)
+        (setq record (scholia-db-make-record
+                      file (list annotation)
+                      (scholia-export-test--checksum scholia-export-test--source)))
+        (scholia-export-test--session "revision" record)
+        (require 'scholia-search)
+        (let ((status-loaded (featurep 'scholia-status)))
+          (unwind-protect
+              (progn
+                (require 'scholia-status)
+                (require 'scholia-org-remark)
+                (let ((entry (car (scholia-search-annotations)))
+                      (org (scholia-org-remark-export "revision")))
+                  (should (string-match-p revision
+                                          (scholia-export-render (list annotation))))
+                  (should (string-match-p revision
+                                          (scholia-search-candidate-string entry)))
+                  (should (string-match-p revision org))
+                  (let ((buffer (scholia-status)))
+                    (unwind-protect
+                        (with-current-buffer buffer
+                          (should (string-match-p revision (buffer-string))))
+                      (when (buffer-live-p buffer)
+                        (kill-buffer buffer))))))
+            (unless status-loaded
+              (unload-feature 'scholia-status t))))))))
+
 (ert-deftest scholia-export-session-reads-each-session-once ()
   (scholia-test-with-session-directory
     (scholia-export-test--with-directory directory

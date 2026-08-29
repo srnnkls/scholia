@@ -24,6 +24,7 @@
 (require 'scholia-db)
 (require 'scholia-thread)
 (require 'scholia-core)
+(require 'scholia-locate)
 (require 'scholia-session)
 
 (define-error 'scholia-export-unknown-format
@@ -175,6 +176,7 @@ begins rather than where it ends."
          (line (scholia-db-annotation-line annotation))
          (column (scholia-db-annotation-column annotation))
          (width (scholia-export--width annotation))
+         (revision (scholia-locate-revision annotation))
          (gutter (make-string (length (number-to-string line)) ?\s))
          (prefix (concat gutter " | "))
          (note-column (+ column width 1))
@@ -182,8 +184,9 @@ begins rather than where it ends."
                 (scholia-db-annotation-text annotation))))
     (string-join
      (append
-      (list (format "%s--> %s:%d:%d [%s]" gutter name line (1+ column)
-                    (scholia-db-annotation-id annotation))
+      (list (format "%s--> %s:%d:%d [%s]%s" gutter name line (1+ column)
+                    (scholia-db-annotation-id annotation)
+                    (if revision (format " [%s]" revision) ""))
             (concat gutter " |")
             (format "%d | %s" line
                     (scholia-db-annotation-line-text annotation))
@@ -231,13 +234,17 @@ instead, which is as near the column as a comment gets."
 The underline comes first, then the id of the annotation, then its note
 and the replies it carries."
   (let* ((annotation (scholia-export--root thread))
-         (column (scholia-db-annotation-column annotation)))
+         (column (scholia-db-annotation-column annotation))
+         (revision (scholia-locate-revision annotation)))
     (mapcar (lambda (payload)
               (scholia-export--comment payload column start end))
             (append (list (make-string (scholia-export--width annotation)
                                        scholia-export--underline)
-                          (format "[%s]"
-                                  (scholia-db-annotation-id annotation)))
+                          (format "[%s]%s"
+                                  (scholia-db-annotation-id annotation)
+                                  (if revision
+                                      (format " [%s]" revision)
+                                    "")))
                     (scholia-export--lines
                      (scholia-db-annotation-text annotation))
                     (scholia-export--replies thread)))))

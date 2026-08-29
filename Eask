@@ -16,6 +16,7 @@
 (depends-on "emacs" "29.1")
 
 (development
+ (depends-on "git-timemachine")
  (depends-on "magit")
  (depends-on "magit-section")
  (depends-on "org-remark"))

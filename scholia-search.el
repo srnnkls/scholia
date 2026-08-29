@@ -18,6 +18,7 @@
 
 (require 'seq)
 (require 'scholia-db)
+(require 'scholia-locate)
 (require 'scholia-session)
 
 (defun scholia-search-annotations ()
@@ -46,11 +47,14 @@ Each entry carries `:session', `:file', `:record' and `:annotation'."
 (defun scholia-search-candidate-string (entry)
   "Return the completion candidate string for annotation ENTRY."
   (let ((annotation (plist-get entry :annotation)))
-    (format "%s — %s — %s — %s — [%s]"
+    (format "%s — %s — %s — %s%s — [%s]"
             (scholia-db-annotation-text annotation)
             (scholia-db-annotation-annotated-text annotation)
             (plist-get entry :file)
             (plist-get entry :session)
+            (if-let ((revision (scholia-locate-revision annotation)))
+                (format " — [%s]" revision)
+              "")
             (scholia-db-annotation-id annotation))))
 
 (defun scholia-search--candidate-entry (candidate candidates)
@@ -128,12 +132,11 @@ Replies follow their `:reply-to' parents in the same record to a position."
             (scholia-save-annotations)))))
     (unless (equal session (scholia-session-default-name))
       (scholia-session-switch session))
-    (find-file file)
+    (scholia-locate-open file annotation)
     (setq-local scholia-session session)
     (when scholia-mode
       (scholia-shutdown nil)
-      (scholia-mode 1))
-    (goto-char (scholia-db-annotation-beg annotation))))
+      (scholia-mode 1))))
 
 (defun scholia-search-sends ()
   "Select a send across sessions and visit its annotation."
