@@ -80,33 +80,44 @@ reached whatever the buffer is narrowed to."
   (let ((segments nil))
     (save-restriction
       (widen)
-      (save-excursion
-        (goto-char beg)
-        (while (< (point) end)
-          (let* ((eol (line-end-position))
-                 (stop (min end eol)))
-            (when (< (point) stop)
-              (push (cons (point) stop) segments))
-            (goto-char (if (< eol end) (1+ eol) end))))))
-    (nreverse segments)))
+      (let ((minimum (point-min))
+            (maximum (point-max)))
+        (setq beg (max minimum (min beg maximum)))
+        (setq end (max beg (min end maximum)))
+        (save-excursion
+          (goto-char beg)
+          (while (< (point) end)
+            (let* ((eol (line-end-position))
+                   (stop (min end eol)))
+              (when (< (point) stop)
+                (push (cons (point) stop) segments))
+              (goto-char (if (< eol end) (1+ eol) end))))))
+    (nreverse segments))))
 
-(defun scholia-overlay--build-chain (segments text chain-id index)
+(defun scholia-overlay--owner-offset (owner)
+  "Return OWNER's configured colour offset in this buffer."
+  (or (plist-get (cdr (assoc-string owner scholia--session-state))
+                 :color-offset)
+      0))
+
+(defun scholia-overlay--build-chain (segments text chain-id index
+                                              &optional owner)
   "Create one overlay per entry of SEGMENTS and return them in buffer order.
 TEXT is the annotation text, CHAIN-ID the identity shared by the
-overlays, and INDEX addresses `scholia-highlight-faces' and, pairwise,
-`scholia-annotation-text-faces'.  A chain reaching the end of the buffer
-has no line left to hang its text on, so its last overlay renders the
-text in an `after-string' instead."
-  (let ((face (nth (mod index (length scholia-highlight-faces))
-                   scholia-highlight-faces))
-        (text-face (nth (mod index (length scholia-annotation-text-faces))
-                        scholia-annotation-text-faces))
+overlays, INDEX its stored colour index, and OWNER its session."
+  (let* ((display-index (+ index (scholia-overlay--owner-offset owner)))
+         (face (nth (mod display-index (length scholia-highlight-faces))
+                    scholia-highlight-faces))
+         (text-face
+          (nth (mod display-index (length scholia-annotation-text-faces))
+               scholia-annotation-text-faces))
         (final (car (last segments))))
     (mapcar (lambda (segment)
               (let ((overlay (make-overlay (car segment) (cdr segment) nil t)))
                 (overlay-put overlay 'scholia-annotation text)
                 (overlay-put overlay 'scholia--chain-id chain-id)
                 (overlay-put overlay 'scholia--color-index index)
+                (overlay-put overlay 'scholia--owner owner)
                 (overlay-put overlay 'face face)
                 (overlay-put overlay 'priority scholia-overlay--priority)
                 (when (and (eq segment final)
@@ -116,28 +127,29 @@ text in an `after-string' instead."
                 overlay))
             segments)))
 
-(defun scholia-create-chain (beg end annotation-text &optional color-index)
+(defun scholia-create-chain (beg end annotation-text
+                                 &optional color-index owner)
   "Annotate BEG to END with ANNOTATION-TEXT and return the chain.
-COLOR-INDEX addresses `scholia-highlight-faces' directly, as a chain
-restored from a session does; without it the next entry of
-`scholia--colors-index-counter' is taken and the counter advanced.
-Creating a chain arms re-chaining in this buffer, so an edit made right
-after needs no separate setup."
+COLOR-INDEX is the stored colour index and OWNER is its session.
+Without COLOR-INDEX the next buffer-local index is taken and advanced."
   (let ((index (or color-index scholia--colors-index-counter)))
     (unless color-index
       (setq scholia--colors-index-counter (1+ scholia--colors-index-counter)))
     (add-hook 'after-change-functions #'scholia-overlay--after-change nil t)
-    (scholia-overlay--build-chain (scholia-overlay--line-segments beg end)
-                                  annotation-text
-                                  (gensym "scholia-chain-")
-                                  index)))
+    (scholia-overlay--build-chain
+     (scholia-overlay--line-segments beg end)
+     annotation-text (gensym "scholia-chain-") index owner)))
 
 
 ;;;; What a chain carries
 
 (defun scholia-chain-color-index (chain)
-  "Return the index CHAIN addresses `scholia-highlight-faces' with."
+  "Return the stored colour index of CHAIN."
   (overlay-get (car chain) 'scholia--color-index))
+
+(defun scholia-chain-owner (chain)
+  "Return the session owning CHAIN."
+  (overlay-get (car chain) 'scholia--owner))
 
 
 ;;;; Looking a chain up
@@ -157,10 +169,20 @@ inside the current restriction or outside it."
                 (widen)
                 (overlays-in pos (1+ pos))))))
 
+(defun scholia-chains-at (&optional pos)
+  "Return all annotation chains covering POS, which defaults to point."
+  (let ((pos (or pos (point))))
+    (seq-filter
+     (lambda (chain)
+       (seq-some (lambda (overlay)
+                   (and (<= (overlay-start overlay) pos)
+                        (< pos (overlay-end overlay))))
+                 chain))
+     (scholia-buffer-chains))))
+
 (defun scholia-chain-at (pos)
-  "Return the chain covering POS, or nil when no annotation covers it."
-  (let ((overlay (scholia-annotation-at pos)))
-    (and overlay (scholia-overlay--chain-of overlay))))
+  "Return the first chain covering POS, or nil when none does."
+  (car (scholia-chains-at pos)))
 
 (defun scholia-chain-first-p (overlay)
   "Return non-nil when OVERLAY begins the chain it belongs to."
@@ -224,9 +246,14 @@ rendering anything."
                      (and (overlay-get final 'after-string) t)))
       (let ((text (overlay-get template 'scholia-annotation))
             (chain-id (overlay-get template 'scholia--chain-id))
-            (index (overlay-get template 'scholia--color-index)))
+            (index (overlay-get template 'scholia--color-index))
+            (owner (overlay-get template 'scholia--owner))
+            (revision (overlay-get template 'scholia-core--revision)))
         (mapc #'delete-overlay chain)
-        (scholia-overlay--build-chain segments text chain-id index)))))
+        (let ((rebuilt (scholia-overlay--build-chain
+                        segments text chain-id index owner)))
+          (when (and rebuilt revision)
+            (overlay-put (car rebuilt) 'scholia-core--revision revision)))))))
 
 (defun scholia-overlay--after-change (beg end _length)
   "Re-chain every annotation the change between BEG and END touched.

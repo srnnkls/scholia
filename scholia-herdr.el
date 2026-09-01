@@ -96,23 +96,31 @@ Call PERSIST after success."
                 (lambda () (scholia-herdr--dispatch entry payload)))))
     (funcall persist sent send)))
 
-(defun scholia-herdr--store-buffer (sent send)
-  "Store this buffer after recording SENT with SEND."
-  (scholia-db-add-send-batch
-   (scholia-session-file)
-   (mapcar #'scholia-db-annotation-id sent)
-   send)
-  (setq-local scholia--unplaced-annotations
-              (scholia-herdr--replace-sent scholia--unplaced-annotations sent))
-  (scholia-core--store
-   (scholia-herdr--replace-sent (scholia-core--buffer-annotations) sent)))
+(defun scholia-herdr--store-buffer (sent send &optional owner)
+  "Store this buffer after recording SENT with SEND for OWNER."
+  (let* ((owner (or owner (scholia-session-name)))
+         (unplaced (scholia-core--state-get owner :unplaced)))
+    (scholia-db-add-send-batch
+     (scholia-session-file owner)
+     (mapcar #'scholia-db-annotation-id sent)
+     send)
+    (scholia-core--state-put
+     owner :unplaced (scholia-herdr--replace-sent unplaced sent))
+    (when (equal owner (scholia-session-name))
+      (setq-local scholia--unplaced-annotations
+                  (scholia-herdr--replace-sent
+                   scholia--unplaced-annotations sent)))
+    (scholia-core--store
+     (scholia-herdr--replace-sent
+      (scholia-core--buffer-annotations owner) sent)
+     owner)))
 
-(defun scholia-herdr--buffer-payload ()
-  "Return the annotations exported from this buffer."
-  (scholia-export--payload))
+(defun scholia-herdr--buffer-payload (&optional owner)
+  "Return the annotations exported from this buffer for OWNER."
+  (scholia-export--payload owner))
 
-(defun scholia-herdr--send-buffer (select payload scope)
-  "Send the annotations SELECT takes from PAYLOAD with SCOPE."
+(defun scholia-herdr--send-buffer (select payload scope &optional owner)
+  "Send annotations SELECT takes from PAYLOAD with SCOPE for OWNER."
   (let* ((format (scholia-herdr--format))
          (annotations (funcall select payload)))
     (unless annotations
@@ -121,13 +129,16 @@ Call PERSIST after success."
      annotations
      (scholia-export-render annotations format)
      format scope
-     (lambda (sent send) (scholia-herdr--store-buffer sent send)))))
+     (lambda (sent send)
+       (scholia-herdr--store-buffer sent send owner)))))
 
 ;;;###autoload
 (defun scholia-herdr-send ()
   "Send the annotation at point to a herdr target."
   (interactive)
-  (let* ((chain (scholia-chain-at (point)))
+  (let* ((chain (scholia-core--select-chain))
+         (owner (and chain (or (scholia-chain-owner chain)
+                               (scholia-session-name))))
          (annotation (and chain (scholia-core--chain-annotation chain))))
     (unless annotation
       (user-error "No annotation at point"))
@@ -137,8 +148,8 @@ Call PERSIST after success."
          (seq-filter (lambda (candidate)
                        (equal id (scholia-db-annotation-id candidate)))
                      payload))
-       (scholia-herdr--buffer-payload)
-       'point))))
+       (scholia-herdr--buffer-payload owner)
+       'point owner))))
 
 ;;;###autoload
 (defun scholia-herdr-send-region (&optional beg end)

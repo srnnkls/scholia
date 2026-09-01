@@ -100,11 +100,31 @@ keys on."
   (completing-read prompt (scholia-session-list) nil t))
 
 (defun scholia-session--buffers-of (names)
-  "Return the annotated buffers resolving to one of the sessions NAMES."
-  (seq-filter (lambda (buffer)
-                (with-current-buffer buffer
-                  (and (member (scholia-session-name) names) t)))
-              (scholia-core--annotated-buffers)))
+  "Return annotated buffers showing one of the sessions NAMES."
+  (seq-filter
+   (lambda (buffer)
+     (with-current-buffer buffer
+       (seq-some (lambda (name)
+                   (member name (scholia-effective-sessions)))
+                 names)))
+   (scholia-core--annotated-buffers)))
+
+(defun scholia-session--save-buffers (buffers)
+  "Save every annotated buffer in BUFFERS."
+  (dolist (buffer buffers)
+    (with-current-buffer buffer (scholia-save-annotations))))
+
+(defun scholia-session--redraw-buffers (buffers)
+  "Redraw every annotated buffer in BUFFERS."
+  (dolist (buffer buffers)
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (scholia-shutdown nil)
+        (scholia-mode 1)))))
+
+(defun scholia-session--all-buffers ()
+  "Return all buffers currently displaying annotations."
+  (scholia-core--annotated-buffers))
 
 
 ;;;; Project assignments
@@ -215,6 +235,13 @@ it instead of pointing them somewhere.  The default is compared as
 answers to the name every buffer then annotates into."
   (when (equal (scholia-session-default-name) old)
     (set-default 'scholia-session new))
+  (set-default
+   'scholia-active-sessions
+   (delete-dups
+    (delq nil
+          (mapcar (lambda (session)
+                    (if (equal session old) new session))
+                  scholia-active-sessions))))
   (scholia-session--rebind-buffers old new)
   (scholia-session--map-assignments
    (lambda (entry)
@@ -236,41 +263,56 @@ header into it rather than reporting a session nothing can open."
       (scholia-db-session-file-p file)
     (error t)))
 
+(defun scholia-session-activate (name)
+  "Show session NAME in every annotated buffer."
+  (interactive (list (scholia-session--read-name "Activate session: ")))
+  (scholia-session--check-name name)
+  (scholia-session--existing-file name)
+  (unless (member name scholia-active-sessions)
+    (let ((buffers (scholia-session--all-buffers)))
+      (scholia-session--save-buffers buffers)
+      (set-default 'scholia-active-sessions
+                   (append scholia-active-sessions (list name)))
+      (scholia-session--redraw-buffers buffers)))
+  name)
+
+(defun scholia-session-deactivate (name)
+  "Stop showing session NAME in annotated buffers."
+  (interactive
+   (list (completing-read "Deactivate session: "
+                          scholia-active-sessions nil t)))
+  (when (member name scholia-active-sessions)
+    (let ((buffers (scholia-session--all-buffers)))
+      (scholia-session--save-buffers buffers)
+      (set-default 'scholia-active-sessions
+                   (delete name (copy-sequence scholia-active-sessions)))
+      (scholia-session--redraw-buffers buffers)))
+  name)
+
 (defun scholia-session-create (name)
-  "Make a session called NAME, holding no annotation yet.
-No buffer changes the session it annotates into; `scholia-session-switch'
-does that.  A NAME already taken is refused rather than emptied."
+  "Make and activate an empty session called NAME."
   (interactive (list (read-string "New session: ")))
   (scholia-session--check-name name)
   (let ((file (scholia-session-file name)))
     (when (scholia-session--taken-p file)
       (scholia-session--refuse "A session called %s already exists" name))
     (scholia-db-create-session file)
-    name))
+    (set-default 'scholia-session name)
+    (scholia-session-activate name)))
 
 (defun scholia-session-switch (name)
-  "Annotate into the session called NAME from now on.
-Every buffer resolving to the session being left or to NAME stores what
-it holds first and is redrawn afterwards.  The two halves are one set:
-the redraw takes the annotations down and reads them back from disk, so
-a buffer already bound to NAME would lose whatever it had not stored.  A
-buffer resolving to some other session is left alone.
-
-A NAME no session file answers to is refused: `scholia-session-create'
-makes a session, and a typo at the prompt must not mint one."
+  "Use NAME as the global target and keep it visible."
   (interactive (list (scholia-session--read-name "Switch to session: ")))
   (scholia-session--check-name name)
   (scholia-session--existing-file name)
-  (let ((affected (scholia-session--buffers-of
-                   (list (scholia-session-default-name) name))))
-    (dolist (buffer affected)
-      (with-current-buffer buffer
-        (scholia-save-annotations)))
+  (let* ((old (scholia-session-default-name))
+         (buffers (scholia-session--all-buffers)))
+    (scholia-session--save-buffers buffers)
     (set-default 'scholia-session name)
-    (dolist (buffer affected)
-      (with-current-buffer buffer
-        (scholia-shutdown nil)
-        (scholia-mode 1))))
+    (set-default 'scholia-active-sessions
+                 (delete-dups
+                  (append scholia-active-sessions (list old name))))
+    (scholia-session--redraw-buffers buffers))
   (run-hooks 'scholia-session-switch-hook)
   name)
 
@@ -293,31 +335,34 @@ them orphaned at a name nothing answers to."
          (target (scholia-session-file new))
          (header (plist-get (scholia-db-interchange source) :session))
          (default (default-value 'scholia-session))
+         (active (copy-sequence scholia-active-sessions))
          (bindings (scholia-session--bindings))
          (projects (copy-tree (default-value 'scholia-project-sessions)))
          (cache (copy-tree scholia--assignment-cache))
          (moved nil))
     (when (file-exists-p target)
       (scholia-session--refuse "A session called %s already exists" new))
-    (dolist (buffer (scholia-session--buffers-of (list old)))
-      (with-current-buffer buffer
-        (scholia-save-annotations)))
-    (condition-case failure
-        (progn
-          (scholia-store-rename source target)
-          (setq moved t)
-          (scholia-db-set-session-name target new)
-          (scholia-session--rebind old new)
-          new)
-      (error
-       (when moved
-         (scholia-store-rename target source)
-         (scholia-session--restore-header source header))
-       (set-default 'scholia-session default)
-       (scholia-session--restore-bindings bindings)
-       (set-default 'scholia-project-sessions projects)
-       (setq scholia--assignment-cache cache)
-       (signal (car failure) (cdr failure))))))
+    (let ((affected (scholia-session--buffers-of (list old))))
+      (scholia-session--save-buffers affected)
+      (condition-case failure
+          (progn
+            (scholia-store-rename source target)
+            (setq moved t)
+            (scholia-db-set-session-name target new)
+            (scholia-session--rebind old new)
+            (scholia-session--redraw-buffers affected)
+            new)
+        (error
+         (when moved
+           (scholia-store-rename target source)
+           (scholia-session--restore-header source header))
+         (set-default 'scholia-session default)
+         (set-default 'scholia-active-sessions active)
+         (scholia-session--restore-bindings bindings)
+         (set-default 'scholia-project-sessions projects)
+         (setq scholia--assignment-cache cache)
+         (ignore-errors (scholia-session--redraw-buffers affected))
+         (signal (car failure) (cdr failure)))))))
 
 (defun scholia-session-delete (name &optional force)
   "Delete the session called NAME.
@@ -333,11 +378,15 @@ them for the next session of the same name to open."
   (interactive (list (scholia-session--read-name "Delete session: ")
                      current-prefix-arg))
   (scholia-session--check-name name)
-  (let ((file (scholia-session--existing-file name)))
-    (when (and (not force) (scholia-session--buffers-of (list name)))
+  (let* ((file (scholia-session--existing-file name))
+         (active (member name scholia-active-sessions))
+         (affected (scholia-session--buffers-of (list name)))
+         (redraw (if active (scholia-session--all-buffers) affected)))
+    (when (and (not force) affected)
       (scholia-session--refuse "Buffers still annotate into %s" name))
     (scholia-store-delete file)
     (scholia-session--rebind name nil)
+    (when active (scholia-session--redraw-buffers redraw))
     name))
 
 (defun scholia-session-export (name file)

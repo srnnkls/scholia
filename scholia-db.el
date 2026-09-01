@@ -437,6 +437,9 @@ whole value, which is the only place its header is."
 
 ;;;; The I/O entry points
 
+(defvar scholia-db--source-context-p nil
+  "Whether incoming annotations already carry exact source context.")
+
 (defun scholia-db--snapshot (annotation)
   "Return ANNOTATION with its source context taken from the current buffer.
 The context is `:line', `:line-text', `:column' and `:end-column', which
@@ -446,7 +449,9 @@ ends where that line ends.  Replies hold no position and pass through
 untouched."
   (if (or (scholia-db-annotation-reply-p annotation)
           (not (scholia-db-annotation-beg annotation))
-          (scholia-db-annotation-revision annotation))
+          (scholia-db-annotation-revision annotation)
+          (and scholia-db--source-context-p
+               (scholia-db-annotation-line-text annotation)))
       annotation
     (save-restriction
       (widen)

@@ -119,28 +119,26 @@ Replies follow their `:reply-to' parents in the same record to a position."
           entries)))
 
 (defun scholia-search--jump (entry)
-  "Visit the source location belonging to ENTRY."
+  "Visit ENTRY, activating its owner in a multi-session display."
   (let* ((session (plist-get entry :session))
          (annotation (scholia-search--jump-annotation entry))
-         (file (plist-get entry :file))
-         (buffer (find-buffer-visiting file)))
-    (when buffer
+         (file (plist-get entry :file)))
+    (when-let ((buffer (find-buffer-visiting file)))
       (with-current-buffer buffer
-        (when (or scholia-mode (scholia-buffer-chains))
-          (let ((scholia--unplaced-annotations
-                 (append scholia--unplaced-annotations
-                         (unless scholia-mode
-                           (scholia-db-record-annotations
-                            (scholia-db-record
-                             (scholia-session-file) file))))))
-            (scholia-save-annotations)))))
-    (unless (equal session (scholia-session-default-name))
-      (scholia-session-switch session))
-    (scholia-locate-open file annotation)
-    (setq-local scholia-session session)
-    (when scholia-mode
-      (scholia-shutdown nil)
-      (scholia-mode 1))))
+        (when scholia-mode (scholia-save-annotations))))
+    (scholia-session-activate session)
+    (setq annotation (scholia-locate-open file annotation))
+    (if scholia-mode
+        (progn
+          (scholia-shutdown nil)
+          (scholia-mode 1))
+      (scholia-mode 1))
+    (unless (seq-some
+             (lambda (chain)
+               (equal (scholia-core--chain-id chain)
+                      (scholia-db-annotation-id annotation)))
+             (scholia-buffer-chains))
+      (scholia-core--restore annotation session))))
 
 (defun scholia-search-sends ()
   "Select a send across sessions and visit its annotation."

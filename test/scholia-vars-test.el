@@ -121,8 +121,34 @@ Reported for a probe loading the leaf on its own.")
               (should (file-exists-p (expand-file-name "scholia-vars.elc" dir)))))
         (delete-directory dir t)))))
 
-(defconst scholia-vars-test--entry-point-probe
-  '(progn
+(defconst scholia-vars-test--autoloaded-commands
+  '(scholia-mode
+    scholia-save-annotations
+    scholia-annotate
+    scholia-delete-annotation
+    scholia-reply-to
+    scholia-goto-next-annotation
+    scholia-goto-previous-annotation
+    scholia-session-create
+    scholia-session-switch
+    scholia-session-activate
+    scholia-session-deactivate
+    scholia-session-rename
+    scholia-session-delete
+    scholia-session-import
+    scholia-session-export
+    scholia-session-assign-project
+    scholia-session-load-assignments
+    scholia-export
+    scholia-export-session
+    scholia-search
+    scholia-search-sends
+    scholia-org-remark-export)
+  "Commands the package entry point must publish as autoloads.")
+
+(defun scholia-vars-test--entry-point-probe ()
+  "Return a form reporting what loading the package entry point publishes."
+  `(progn
      (require 'scholia-vars)
      (let ((module (lambda (file)
                      (file-name-nondirectory
@@ -153,6 +179,16 @@ Reported for a probe loading the leaf on its own.")
         (list :features (sort loaded #'string<)
               :entry-point-requires (sort required #'string<)
               :bound-by-the-entry-point (sort added #'string<)
+              :unpublished-commands
+              (delq nil
+                    (mapcar
+                     (lambda (symbol)
+                       (unless (and (fboundp symbol)
+                                    (commandp symbol)
+                                    (or (eq symbol 'scholia-mode)
+                                        (autoloadp (symbol-function symbol))))
+                         symbol))
+                     ',scholia-vars-test--autoloaded-commands))
               :defined-in
               (mapcar (lambda (symbol)
                         (cons symbol
@@ -161,18 +197,7 @@ Reported for a probe loading the leaf on its own.")
                                            (symbol-file symbol 'defun)
                                          (find-lisp-object-file-name symbol 'defvar)))))
                       '(scholia-mode scholia-mode-map
-                        scholia-export-format scholia-session))))))
-  "Form reporting what loading the entry point pulls in and where it comes from.
-Each origin is reported as a base name without its extension, so a source
-load and a bytecode load are indistinguishable to the assertion.")
-
-(defconst scholia-vars-test--autoloaded-commands
-  '(scholia-mode scholia-session-switch scholia-export scholia-search
-                 scholia-search-sends scholia-export-session scholia-org-remark-export)
-  "One command per feature module the entry point must publish.
-Command `scholia-mode' requires `scholia-core' from its own body, so the
-annotation commands arrive with it; a module nothing requires reaches the
-user only through a cookie of its own.")
+                        scholia-export-format scholia-session)))))))
 
 (defun scholia-vars-test--autoload-probe (generated)
   "Return a form reporting which commands GENERATED can autoload.
@@ -203,11 +228,12 @@ cookies can make a command autoloadable."
 
 (ert-deftest scholia-vars-entry-point-requires-the-leaf-and-holds-no-state ()
   (should (equal (scholia-vars-test--probe
-                  scholia-vars-test--entry-point-probe
+                  (scholia-vars-test--entry-point-probe)
                   "-L" (expand-file-name scholia-test-project-root))
                  '(:features ("scholia" "scholia-vars")
                    :entry-point-requires ("scholia-vars")
                    :bound-by-the-entry-point ()
+                   :unpublished-commands nil
                    :defined-in ((scholia-mode . "scholia-vars")
                                 (scholia-mode-map . "scholia-vars")
                                 (scholia-export-format . "scholia-vars")
@@ -229,6 +255,7 @@ cookies can make a command autoloadable."
   (should (get 'scholia 'custom-group))
   (dolist (symbol '(scholia-session-directory
                     scholia-session
+                    scholia-active-sessions
                     scholia-session-state-file
                     scholia-project-sessions
                     scholia-project-root-function
@@ -238,6 +265,9 @@ cookies can make a command autoloadable."
                     scholia-annotation-history-limit
                     scholia-highlight-faces
                     scholia-annotation-text-faces
+                    scholia-session-color-cycle
+                    scholia-source-snapshot-mode
+                    scholia-source-snapshot-limit
                     scholia-use-messages
                     scholia-annotation-column
                     scholia-search-region-lines-delta))
@@ -247,12 +277,16 @@ cookies can make a command autoloadable."
     (should (string-suffix-p "scholia/sessions"
                              (directory-file-name directory))))
   (should-not (default-value 'scholia-session))
+  (should-not (default-value 'scholia-active-sessions))
   (should-not (default-value 'scholia-project-sessions))
   (should (functionp (default-value 'scholia-project-root-function)))
   (should (eq (default-value 'scholia-export-format) 'rustc))
   (should-not (default-value 'scholia-herdr-default-target))
   (should-not (default-value 'scholia-herdr-send-format))
   (should (equal (default-value 'scholia-annotation-history-limit) 200))
+  (should (equal (default-value 'scholia-session-color-cycle) '(0 1 2)))
+  (should (eq (default-value 'scholia-source-snapshot-mode) 'bounded-full))
+  (should (equal (default-value 'scholia-source-snapshot-limit) (* 256 1024)))
   (should (eq (default-value 'scholia-use-messages) t))
   (should (equal (default-value 'scholia-annotation-column) 85))
   (should (equal (default-value 'scholia-search-region-lines-delta) 2))

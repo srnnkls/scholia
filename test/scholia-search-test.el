@@ -51,14 +51,23 @@ into cannot leak into the next one."
   (declare (indent 0) (debug body))
   `(scholia-test-with-session-directory
      (scholia-search-test--require)
-     (let ((scholia-session nil)
-           (scholia-project-sessions nil)
-           (scholia-project-root-function (lambda () nil))
-           (scholia-autosave nil)
-           (scholia-session-switch-hook nil)
-           (scholia-session-state-file
-            (expand-file-name "assignments.eld" scholia-session-directory)))
-       ,@body)))
+     (let ((session-default (default-value 'scholia-session))
+           (active-default (copy-sequence (default-value 'scholia-active-sessions))))
+       (unwind-protect
+           (progn
+             (set-default 'scholia-session nil)
+             (set-default 'scholia-active-sessions nil)
+             (let ((scholia-session nil)
+                   (scholia-active-sessions nil)
+                   (scholia-project-sessions nil)
+                   (scholia-project-root-function (lambda () nil))
+                   (scholia-autosave nil)
+                   (scholia-session-switch-hook nil)
+                   (scholia-session-state-file
+                    (expand-file-name "assignments.eld" scholia-session-directory)))
+               ,@body))
+         (set-default 'scholia-session session-default)
+         (set-default 'scholia-active-sessions active-default)))))
 
 (defmacro scholia-search-test--choosing (needle &rest body)
   "Evaluate BODY with `completing-read' answering the candidate matching NEEDLE.
@@ -231,11 +240,8 @@ one and it lands nowhere."
             (should-not (find-buffer-visiting decoy)))
         (scholia-search-test--forget decoy wanted)))))
 
-(ert-deftest scholia-search-switches-session-only-when-the-jump-needs-it ()
-  "A jump out of the current session switches; a jump inside it does not.
-Opening the file without switching leaves the buffer drawing from a
-session that does not hold the annotation, and switching to the session
-already current redraws every buffer bound to it for nothing."
+(ert-deftest scholia-search-activates-the-result-owner-without-switching-target ()
+  "A jump keeps its write target while making the result owner visible."
   (scholia-search-test--with-state
     (let ((here (scholia-search-test--source "here.txt" "alpha beta\n"))
           (there (scholia-search-test--source "there.txt" "gamma delta\n"))
@@ -248,27 +254,33 @@ already current redraws every buffer bound to it for nothing."
        "there" there
        (list (scholia-search-test--annotation "id-there" "the far note"
                                               "gamma" 1 6)))
-      (setq scholia-session "here")
+      (set-default 'scholia-session "here")
       (add-hook 'scholia-session-switch-hook
                 (lambda () (setq switches (1+ switches))))
       (unwind-protect
           (progn
             (scholia-search-test--choosing "the far note" (scholia-search))
-            (should (equal "there" (default-value 'scholia-session)))
-            (should (equal 1 switches))
+            (should (equal "here" (default-value 'scholia-session)))
+            (should (equal '("there") (default-value 'scholia-active-sessions)))
+            (should (zerop switches))
             (goto-char 7)
             (scholia-annotate "the unsaved note")
             (scholia-search-test--choosing "the far note" (scholia-search))
-            (should (equal 1 (point)))
-            (should (equal "there" (default-value 'scholia-session)))
-            (should (equal 1 switches))
-            (should (equal '("the far note" "the unsaved note")
-                           (sort (mapcar #'scholia-db-annotation-text
-                                         (scholia-db-record-annotations
-                                          (scholia-db-record
-                                           (scholia-session-file "there") there)))
-                                 #'string<))))
-        (scholia-search-test--forget here there)))))
+            (should (= 1 (point)))
+            (should (equal "here" (default-value 'scholia-session)))
+            (should (equal '("there") (default-value 'scholia-active-sessions)))
+            (should (zerop switches))
+            (should (equal '("the far note")
+                           (mapcar #'scholia-db-annotation-text
+                                   (scholia-db-record-annotations
+                                    (scholia-db-record
+                                     (scholia-session-file "there") there)))))
+            (should (equal '("the unsaved note")
+                           (mapcar #'scholia-db-annotation-text
+                                   (scholia-db-record-annotations
+                                    (scholia-db-record
+                                     (scholia-session-file "here") there)))))
+        (scholia-search-test--forget here there))))))
 
 (ert-deftest scholia-search-announces-a-completion-category ()
   "The collection the command offers is categorised as `scholia-annotation'.
@@ -375,8 +387,8 @@ sends the reader to a place nobody annotated."
         (should-error (scholia-search--jump-annotation entry)
                       :type 'user-error)))))
 
-(ert-deftest scholia-search-binds-visited-project-buffer-to-selected-session ()
-  "A selected result outranks the session assigned to its project."
+(ert-deftest scholia-search-keeps-a-visited-project-buffer-on-its-write-target ()
+  "A selected result activates its owner without changing the project target."
   (scholia-search-test--with-state
     (let* ((file (scholia-search-test--source "project.txt" "alpha beta gamma\n"))
            (root (file-name-directory file))
@@ -400,12 +412,14 @@ sends the reader to a place nobody annotated."
             (goto-char 13)
             (scholia-annotate "beta unsaved")
             (scholia-search-test--choosing "alpha note" (scholia-search))
-            (should (equal "alpha" (scholia-session-name)))
+            (should (equal "beta" (scholia-session-name)))
+            (should (member "alpha" (default-value 'scholia-active-sessions)))
             (should (= 1 (point)))
-            (should (equal '("alpha note")
-                           (mapcar (lambda (chain)
-                                     (overlay-get (car chain) 'scholia-annotation))
-                                   (scholia-buffer-chains))))
+            (should (equal '("alpha note" "beta note" "beta unsaved")
+                           (sort (mapcar (lambda (chain)
+                                           (overlay-get (car chain) 'scholia-annotation))
+                                         (scholia-buffer-chains))
+                                 #'string<)))
             (scholia-save-annotations)
             (should (equal '("alpha note")
                            (mapcar #'scholia-db-annotation-text
@@ -446,7 +460,8 @@ sends the reader to a place nobody annotated."
       (plist-put annotation :revision revision)
       (scholia-search-test--seed "revision" file (list annotation))
       (let ((entry (car (scholia-search-annotations)))
-            (status-loaded (featurep 'scholia-status)))
+            (status-loaded (featurep 'scholia-status))
+            (excerpt-buffer nil))
         (unwind-protect
             (progn
               (scholia-search--jump entry)
@@ -468,13 +483,14 @@ sends the reader to a place nobody annotated."
                            (lambda (format &rest arguments)
                              (push (apply #'format-message format arguments) messages))))
                   (scholia-search--jump entry))
-                (should (equal (buffer-string)
-                               "before\nworking tree line\nrevision target\n"))
+                (setq excerpt-buffer (current-buffer))
+                (should (equal (buffer-string) "revision"))
                 (should (= (point) (point-min)))
-                (should (seq-some (lambda (message)
-                                    (string-match-p "working tree" message))
-                                  messages))))
+                (should-not messages)))
           (scholia-search-test--forget file)
+          (when (buffer-live-p excerpt-buffer)
+            (with-current-buffer excerpt-buffer (set-buffer-modified-p nil))
+            (kill-buffer excerpt-buffer))
           (unless status-loaded
             (unload-feature 'scholia-status t)))))))
 
@@ -536,7 +552,7 @@ sends the reader to a place nobody annotated."
                        (scholia-db-record-annotations
                         (plist-get (car entries) :record))))))))
 
-(ert-deftest scholia-search-sends-groups-search-keys-and-jumps-reply-to-root ()
+(ert-deftest scholia-search-sends-groups-search-keys-and-activates-reply-owner ()
   "Send completion groups destinations, finds every key, and follows replies."
   (scholia-search-test--with-state
     (let* ((file (scholia-search-test--source "thread.txt" "alpha beta\n"))
@@ -568,7 +584,8 @@ sends the reader to a place nobody annotated."
                                         (funcall group candidate nil)))
                          candidate))))
             (scholia-search-sends)
-            (should (equal "planning" (scholia-session-name)))
+            (should (equal "default" (scholia-session-name)))
+            (should (member "planning" (default-value 'scholia-active-sessions)))
             (should (equal file (buffer-file-name)))
             (should (= 1 (point))))
         (scholia-search-test--forget file)))))

@@ -421,21 +421,21 @@ An unregistered FORMAT signals `scholia-export-unknown-format'."
 
 ;;;; The command
 
-(defun scholia-export--payload ()
-  "Return the annotations of this buffer with the replies they carry.
-The chains on screen answer with the source context they hold right
-now, and the replies stored for this file join them: a reply is kept by
-the record alone, so an export built from the buffer would drop every
-one of them."
-  (let ((annotations (mapcar #'scholia-db--snapshot
-                             (scholia-core--buffer-annotations)))
-        (file (scholia-buffer-file)))
+(defun scholia-export--payload (&optional session)
+  "Return this buffer's roots and stored replies owned by SESSION."
+  (let* ((session (or session (scholia-session-name)))
+         (annotations
+          (mapcar #'scholia-db--snapshot
+                  (scholia-core--buffer-annotations session)))
+         (location (scholia-locate-source 'capture (point-min)))
+         (source (plist-get location :source-id)))
     (append annotations
-            (and file
-                 (seq-filter #'scholia-db-annotation-reply-p
-                             (scholia-db-record-annotations
-                              (scholia-db-record (scholia-session-file)
-                                                 file)))))))
+            (and source
+                 (seq-filter
+                  #'scholia-db-annotation-reply-p
+                  (scholia-db-record-annotations
+                   (scholia-db-record (scholia-session-file session)
+                                      source)))))))
 
 (defun scholia-export--disk-source (file cache)
   "Return FILE's disk contents from CACHE, or `missing'."
@@ -548,54 +548,76 @@ one of them."
          cache)
       source)))
 
-(defun scholia-export--session-record (record cache format)
-  "Render RECORD using CACHE and FORMAT."
-  (let* ((file (scholia-db-record-file record))
-         (source (scholia-export--disk-source file cache)))
-    (cl-labels
-        ((render (annotations text)
-           (with-temp-buffer
-             (let ((buffer-file-name file))
-               (insert text)
-               (delay-mode-hooks (set-auto-mode))
-               (scholia-export-render annotations format file))))
-         (render-disk (annotations)
-           (if (eq source 'missing)
-               (let ((annotations
-                      (mapcar #'scholia-export--stale annotations)))
-                 (render annotations
-                         (scholia-export--snapshot-source annotations)))
-             (with-temp-buffer
-               (let ((buffer-file-name file)
-                     (view (scholia-db-make-record
-                            file annotations
-                            (scholia-db-record-checksum record))))
-                 (insert source)
-                 (delay-mode-hooks (set-auto-mode))
-                 (pcase-let ((`(,live . ,stale)
-                              (scholia-export--source-groups view)))
-                   (string-join
-                    (delq nil
-                          (list (and live
-                                     (scholia-export-render live format file))
-                                (and stale
-                                     (render stale
-                                             (scholia-export--snapshot-source
-                                              stale)))))
-                    "\n\n")))))))
-      (string-join
-       (mapcar
-        (lambda (view)
-          (let* ((revision (car view))
-                 (annotations (cdr view))
-                 (committed (and revision
-                                 (scholia-export--revision-source
-                                  file revision cache))))
-            (if (and committed (not (eq committed 'missing)))
-                (render annotations committed)
-              (render-disk annotations))))
-        (scholia-export--source-views record))
-       "\n\n"))))
+(defun scholia-export--access-view (record annotations format fallback)
+  "Render ANNOTATIONS from RECORD through their source access.
+FORMAT and FALLBACK select the presentation."
+  (let* ((root (car annotations))
+         (access (or (plist-get root :access)
+                     (if-let ((revision (scholia-locate-revision root)))
+                         (list :kind 'git :path fallback :revision revision)
+                       (list :kind 'file :path fallback))))
+         (annotations (if (plist-get root :access)
+                          annotations
+                        (cons (scholia-db--with-fields root :access access)
+                              (cdr annotations))))
+         (retrieved (scholia-locate-source 'retrieve access annotations))
+         (text (plist-get retrieved :text))
+         (status (plist-get retrieved :status))
+         (truncated (plist-get retrieved :truncated))
+         (name (or (scholia-locate-source 'describe access root) fallback)))
+    (with-temp-buffer
+      (insert text)
+      (let ((buffer-file-name (plist-get access :path))
+            (view (scholia-db-make-record
+                   fallback annotations (scholia-db-record-checksum record))))
+        (if-let ((mode (plist-get access :mode)))
+            (when (fboundp mode) (delay-mode-hooks (funcall mode)))
+          (when buffer-file-name (delay-mode-hooks (set-auto-mode))))
+        (pcase-let ((`(,live . ,stale)
+                     (if (eq status 'excerpt)
+                         (cons nil
+                               (mapcar (lambda (annotation)
+                                         (if (scholia-db-annotation-reply-p annotation)
+                                             annotation
+                                           (scholia-export--stale annotation)))
+                                       annotations))
+                       (scholia-export--source-groups view))))
+          (let ((live-output
+                 (and live
+                      (format "Access: %s [%s%s]\n\n%s"
+                              name status (if truncated ", truncated" "")
+                              (scholia-export-render live format name))))
+                (stale-output
+                 (and stale
+                      (let* ((snapshot (seq-some (lambda (annotation)
+                                                   (plist-get annotation :snapshot))
+                                                 stale))
+                             (source (or snapshot
+                                         (scholia-export--snapshot-source stale)))
+                             (provenance (if snapshot 'full 'excerpt)))
+                        (with-temp-buffer
+                          (insert source)
+                          (let ((buffer-file-name (plist-get access :path)))
+                            (if-let ((mode (plist-get access :mode)))
+                                (when (fboundp mode)
+                                  (delay-mode-hooks (funcall mode)))
+                              (when buffer-file-name
+                                (delay-mode-hooks (set-auto-mode))))
+                            (format "Access: %s [%s%s]\n\n%s"
+                                    name provenance
+                                    (if (and (eq provenance 'excerpt) truncated)
+                                        ", truncated" "")
+                                    (scholia-export-render stale format name))))))))
+            (string-join (delq nil (list live-output stale-output)) "\n\n")))))))
+
+(defun scholia-export--session-record (record _cache format)
+  "Render RECORD through the source access of each source view as FORMAT."
+  (let ((file (scholia-db-record-file record)))
+    (string-join
+     (mapcar (lambda (view)
+               (scholia-export--access-view record (cdr view) format file))
+             (scholia-export--source-views record))
+     "\n\n")))
 
 (defun scholia-export--session-payload (sessions format)
   "Return SESSIONS rendered in session and file order as FORMAT."
@@ -624,14 +646,54 @@ one of them."
       (insert output))
     (display-buffer buffer)))
 
-(defun scholia-export (&optional target format)
-  "Render the annotations of this buffer and put them where TARGET points.
-TARGET is nil to only return the rendering, `kill-ring' to copy it,
-`buffer' to show it in `scholia-export-buffer-name', or the name of a
-file to write it to.  FORMAT defaults to `scholia-export-format'.  The
-rendering is returned whatever TARGET is."
-  (interactive (list 'buffer))
-  (let ((output (scholia-export-render (scholia-export--payload) format)))
+(defun scholia-export--visible-sessions ()
+  "Return effective sessions represented by chains in this buffer."
+  (let ((owners
+         (delete-dups
+          (mapcar (lambda (chain)
+                    (or (scholia-chain-owner chain)
+                        (scholia-session-name)))
+                  (scholia-buffer-chains)))))
+    (or (seq-filter (lambda (session) (member session owners))
+                    (scholia-effective-sessions))
+        (list (scholia-session-name)))))
+
+(defun scholia-export--buffer-access ()
+  "Return the current buffer source's compact live access preamble."
+  (let* ((location (scholia-locate-source 'capture (point-min)))
+         (access (plist-get location :access))
+         (description (scholia-locate-source 'describe access))
+         (retrieved (scholia-locate-source 'retrieve access)))
+    (format "Access: %s [%s]"
+            description (or (plist-get retrieved :status) 'excerpt))))
+
+(defun scholia-export--buffer-sessions (sessions format headers)
+  "Render buffer SESSIONS as FORMAT, adding HEADERS when non-nil."
+  (string-join
+   (mapcar
+    (lambda (session)
+      (let ((rendered
+             (scholia-export-render (scholia-export--payload session) format)))
+        (if headers
+            (format "Session: %s\n\n%s\n\n%s"
+                    session (scholia-export--buffer-access) rendered)
+          rendered)))
+    sessions)
+   "\n\n"))
+
+(defun scholia-export (&optional target format session)
+  "Render visible buffer annotations and deliver them to TARGET.
+FORMAT defaults to `scholia-export-format'.  SESSION selects one visible
+owner; otherwise every visible owner is rendered."
+  (interactive
+   (list 'buffer nil
+         (and current-prefix-arg
+              (cdr (scholia-export--visible-sessions))
+              (scholia-core--read-owner "Export session: "))))
+  (let* ((sessions (if session (list session)
+                     (scholia-export--visible-sessions)))
+         (output (scholia-export--buffer-sessions
+                  sessions format t)))
     (cond ((eq target 'kill-ring) (kill-new output))
           ((eq target 'buffer) (scholia-export--show output))
           ((stringp target) (write-region output nil target nil 'silent)))

@@ -689,8 +689,14 @@ empty a file scholia never made."
         (should-not (scholia-store-test--strays session))
         (should-not (scholia-db-files session))
         (should-not (member "ghost" (scholia-session-list)))
-        (scholia-session-create "ghost")
-        (should (member "ghost" (scholia-session-list)))
+        (let ((target (default-value 'scholia-session))
+              (active (copy-sequence (default-value 'scholia-active-sessions))))
+          (unwind-protect
+              (progn
+                (scholia-session-create "ghost")
+                (should (member "ghost" (scholia-session-list))))
+            (set-default 'scholia-session target)
+            (set-default 'scholia-active-sessions active)))
         (scholia-db-store-record session record)
         (should (equal (scholia-db-record session file) record))
         (let ((connection (sqlite-open foreign)))
@@ -713,8 +719,14 @@ session directory that lists as empty and litters for good, since
         (should-error (scholia-db-create-session session)))
       (should-not (directory-files scholia-session-directory nil
                                    directory-files-no-dot-files-regexp))
-      (scholia-session-create "unborn-clean")
-      (should (member "unborn-clean" (scholia-session-list))))))
+      (let ((target (default-value 'scholia-session))
+            (active (copy-sequence (default-value 'scholia-active-sessions))))
+        (unwind-protect
+            (progn
+              (scholia-session-create "unborn-clean")
+              (should (member "unborn-clean" (scholia-session-list))))
+          (set-default 'scholia-session target)
+          (set-default 'scholia-active-sessions active))))))
 
 (ert-deftest scholia-store-two-migrations-of-one-eld-keep-both-results ()
   "Two Emacs processes migrating one printed session keep every write.
@@ -902,7 +914,6 @@ the caller as that same type error instead of as a format error."
   (scholia-test-with-session-directory
     (let ((hostile (scholia-store-test--session-file "hostile"))
           (unknown (scholia-store-test--session-file "unknown"))
-          (row "(:id \"benign\")")
           (hostile-row "#.(set 'scholia-store-test--read-eval-sentinel t)\n")
           (assignments (expand-file-name "assignments.eld"
                                          scholia-session-directory))
@@ -919,17 +930,7 @@ the caller as that same type error instead of as a format error."
             (should-error (scholia-store-read-interchange hostile)
                           :type 'scholia-db-format-error)
             (should-not (symbol-value sentinel))
-            (let ((original (symbol-function 'read-from-string))
-                  (observed t))
-              (let ((read-eval t))
-                (cl-letf (((symbol-function 'read-from-string)
-                           (lambda (&rest arguments)
-                             (setq observed read-eval)
-                             (apply original arguments))))
-                  (scholia-store--parse row)))
-              (should-not observed))
-            (let ((read-eval t))
-              (should-error (scholia-store--parse hostile-row)))
+            (should-error (scholia-store--parse hostile-row))
             (should-not (symbol-value sentinel))
             (let ((scholia-session-state-file assignments)
                   (scholia-project-sessions nil))

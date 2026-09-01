@@ -15,6 +15,7 @@
 
 ;;; Code:
 
+(require 'eieio)
 (require 'magit-section)
 (require 'seq)
 (require 'scholia-db)
@@ -26,16 +27,18 @@
 (require 'scholia-thread)
 
 (declare-function scholia-herdr--send "scholia-herdr")
-(declare-function magit-section-value "magit-section")
-(declare-function magit-section-parent "magit-section")
-(declare-function magit-section-type "magit-section")
 
-(unless (fboundp 'magit-section-value)
-  (defalias 'magit-section-value (lambda (section) (oref section value))))
-(unless (fboundp 'magit-section-parent)
-  (defalias 'magit-section-parent (lambda (section) (oref section parent))))
-(unless (fboundp 'magit-section-type)
-  (defalias 'magit-section-type (lambda (section) (oref section type))))
+(defsubst scholia-status--section-value (section)
+  "Return SECTION's value."
+  (oref section value))
+
+(defsubst scholia-status--section-parent (section)
+  "Return SECTION's parent."
+  (oref section parent))
+
+(defsubst scholia-status--section-type (section)
+  "Return SECTION's type."
+  (oref section type))
 
 (defconst scholia-status-buffer-name "*scholia-status*"
   "Name of the scholia status buffer.")
@@ -51,10 +54,10 @@
 
 (defun scholia-status--entry (section)
   "Return the dashboard entry represented by hunk SECTION."
-  (let* ((annotation (magit-section-value section))
-         (file-section (magit-section-parent section))
-         (file (magit-section-value file-section))
-         (session (magit-section-value (magit-section-parent file-section))))
+  (let* ((annotation (scholia-status--section-value section))
+         (file-section (scholia-status--section-parent section))
+         (file (scholia-status--section-value file-section))
+         (session (scholia-status--section-value (scholia-status--section-parent file-section))))
     (list :session session
           :file file
           :record (scholia-db-record (scholia-session-file session) file)
@@ -81,15 +84,15 @@
 (defun scholia-status--hunk-at-point ()
   "Return the hunk section at point, if any."
   (let ((section (magit-current-section)))
-    (while (and section (not (eq (magit-section-type section) 'hunk)))
-      (setq section (magit-section-parent section)))
+    (while (and section (not (eq (scholia-status--section-type section) 'hunk)))
+      (setq section (scholia-status--section-parent section)))
     section))
 
 (defun scholia-status--session-at-point ()
   "Return the session section at point, if any."
   (let ((section (magit-current-section)))
-    (while (and section (not (eq (magit-section-type section) 'session)))
-      (setq section (magit-section-parent section)))
+    (while (and section (not (eq (scholia-status--section-type section) 'session)))
+      (setq section (scholia-status--section-parent section)))
     section))
 
 (defun scholia-status--hunks ()
@@ -180,7 +183,7 @@
 
 (defun scholia-status-switch-session (session)
   "Switch to SESSION."
-  (interactive (list (magit-section-value
+  (interactive (list (scholia-status--section-value
                       (or (scholia-status--session-at-point)
                           (user-error "No session at point")))))
   (scholia-session-switch session))
@@ -194,7 +197,7 @@
 (defun scholia-status-rename-session (old new)
   "Rename OLD session to NEW."
   (interactive
-   (let ((old (magit-section-value
+   (let ((old (scholia-status--section-value
                (or (scholia-status--session-at-point)
                    (user-error "No session at point")))))
      (list old (read-string (format "Rename %s to: " old)))))
@@ -225,7 +228,7 @@
 
 (defun scholia-status-mark-session (session)
   "Toggle SESSION in the sessions selected for export."
-  (interactive (list (magit-section-value
+  (interactive (list (scholia-status--section-value
                       (or (scholia-status--session-at-point)
                           (user-error "No session at point")))))
   (if (member session scholia-status--marked-sessions)
@@ -305,16 +308,16 @@
     groups))
 
 (defun scholia-status--insert-source (file revision annotations)
-  "Insert FILE at REVISION, falling back to ANNOTATIONS' saved source context."
-  (let ((source (and revision
-                     (scholia-locate--revision-buffer file revision))))
-    (unwind-protect
-        (if source
-            (insert-buffer-substring source)
-          (condition-case nil
-              (insert-file-contents file)
-            (error (insert (scholia-export--snapshot-source annotations)))))
-      (when source (kill-buffer source)))))
+  "Insert source FILE at REVISION using ANNOTATIONS for fallback access."
+  (let* ((root (seq-find (lambda (annotation)
+                           (not (scholia-db-annotation-reply-p annotation)))
+                         annotations))
+         (access (or (plist-get root :access)
+                     (if revision
+                         (list :kind 'git :path file :revision revision)
+                       (list :kind 'file :path file))))
+         (retrieved (scholia-locate-source 'retrieve access annotations)))
+    (insert (plist-get retrieved :text))))
 
 (defun scholia-status--render-file (entries format)
   "Render ENTRIES against their root source view using FORMAT."

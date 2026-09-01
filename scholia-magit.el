@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'eieio)
 (require 'magit-diff)
 (require 'magit-git)
 (require 'scholia-locate)

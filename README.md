@@ -32,10 +32,33 @@ optional setting is `scholia-session-directory`, which chooses where named sessi
 `scholia-delete-annotation` removes it; `scholia-reply-to` adds a reply. Replies form threads,
 rendered in `scholia-status` and in buffer and session exports.
 
-Create, change, or import a session with `scholia-session-create`, `scholia-session-switch`, and
-`scholia-session-import`. Find annotations across sessions with `scholia-search`, or sent work
-with `scholia-search-sends`. Use `scholia-export` for the current buffer and
-`scholia-export-session` for one or more sessions. `scholia-status` is the session dashboard.
+A buffer's write target is its buffer-local `scholia-session`, its project assignment, or the
+global default. `scholia-session-create` and `scholia-session-switch` change the global target.
+`scholia-session-activate` shows another session in every annotated buffer without changing that
+target; `scholia-session-deactivate` hides it. Visible sessions use offsets from
+`scholia-session-color-cycle` so their annotations remain distinguishable.
+
+A new annotation goes to the write target. With a prefix argument, `scholia-annotate` selects
+another visible session. Replies and deletes always follow the selected annotation's owning
+session. `scholia-export` exports every visible session in the current buffer; with a prefix
+argument, it selects one. Use `scholia-export-session` for one or more complete sessions.
+
+Import a session with `scholia-session-import`. Find annotations across sessions with
+`scholia-search`, or sent work with `scholia-search-sends`. `scholia-status` is the session
+dashboard.
+
+## Sources and recovery
+
+Files and arbitrary live buffers work without an integration module. Each annotation records a
+serializable access descriptor; file, Git revision, and buffer descriptors identify how to reopen
+or describe the source. Magit, Ediff, and git-timemachine supply revision-aware locations when
+their optional resolver modules are loaded.
+
+`scholia-source-snapshot-mode` controls retained source text. The default, `bounded-full`, keeps a
+complete snapshot up to `scholia-source-snapshot-limit`; larger sources fall back to saved line
+excerpts and are marked truncated. Set the mode to `excerpts` to retain excerpts only. Session
+exports label every source view with its access description and whether the rendered source is
+`live`, `full`, or `excerpt`; truncated excerpt fallback is labeled too.
 
 ## Optional integrations
 
@@ -53,8 +76,8 @@ Load the location resolvers, dashboard, and Org Remark export explicitly:
 (require 'scholia-org-remark)
 ```
 
-Magit, Ediff, and git-timemachine are the supported location resolvers. Fileless-buffer reopen
-support was cut: the supported transient-buffer workflows are covered by those resolvers.
+Magit, Ediff, and git-timemachine are optional revision-aware location resolvers. Generic buffers
+and ordinary files are supported by the built-in source adapters.
 
 `scholia-herdr` is source-tree/local-only: both it and its unpublished `herdr` dependency are
 excluded from the package. When both are available locally, load it with `(require 'scholia-herdr)`.
@@ -79,6 +102,8 @@ Add this to a Doom configuration if it suits your leader layout:
       :desc "Previous annotation" "p" #'scholia-goto-previous-annotation
       :desc "Create session" "s c" #'scholia-session-create
       :desc "Switch session" "s s" #'scholia-session-switch
+      :desc "Activate session" "s a" #'scholia-session-activate
+      :desc "Deactivate session" "s d" #'scholia-session-deactivate
       :desc "Import session" "s i" #'scholia-session-import
       :desc "Search annotations" "f" #'scholia-search
       :desc "Search sends" "F" #'scholia-search-sends

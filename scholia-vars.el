@@ -16,14 +16,12 @@
 
 ;;; Code:
 
-(defvar read-eval t
-  "Whether persisted Lisp forms may evaluate while being read.")
-
 (declare-function scholia-annotate "scholia-core")
 (declare-function scholia-delete-annotation "scholia-core")
 (declare-function scholia-reply-to "scholia-core")
 (declare-function scholia-initialize "scholia-core")
 (declare-function scholia-shutdown "scholia-core")
+(declare-function scholia-session-name "scholia-core")
 (declare-function scholia-status "scholia-status")
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -49,6 +47,10 @@ global default when no project matches."
   :type '(choice (const :tag "Resolve from project or default" nil)
                  (string :tag "Session name"))
   :local t)
+
+(defcustom scholia-active-sessions nil
+  "Session names shown in addition to a buffer's annotation target."
+  :type '(repeat string))
 
 (defcustom scholia-project-sessions nil
   "Alist mapping a project root to the session name used inside it."
@@ -98,8 +100,7 @@ file, and answer before the stored ones."
     (with-temp-buffer
       (insert-file-contents scholia-session-state-file)
       (condition-case nil
-          (let ((read-eval nil)
-                (stored (read (current-buffer))))
+          (let ((stored (read (current-buffer))))
             (and (listp stored) stored))
         (error nil)))))
 
@@ -165,6 +166,20 @@ Each entry pairs with the entry of `scholia-highlight-faces' at the same
 position."
   :type '(repeat plist))
 
+(defcustom scholia-session-color-cycle '(0 1 2)
+  "Offsets used to distinguish active sessions' annotation colours."
+  :type '(repeat integer))
+
+(defcustom scholia-source-snapshot-mode 'bounded-full
+  "Policy used to retain source text for later access.
+`bounded-full' retains complete source that fits the configured limit.
+`excerpts' retains only the line context already stored with annotations."
+  :type '(choice (const bounded-full) (const excerpts)))
+
+(defcustom scholia-source-snapshot-limit (* 256 1024)
+  "Maximum number of bytes retained in a complete source snapshot."
+  :type 'natnum)
+
 (defface scholia-prefix
   '((t (:inherit default)))
   "Face of the padding between a text line and its annotation.")
@@ -197,6 +212,9 @@ Applies when a file changed while `scholia-mode' was off."
 
 
 ;;;; Buffer-local state
+
+(defvar-local scholia--session-state nil
+  "Alist of per-session rendering and preservation state.")
 
 (defvar-local scholia--colors-index-counter 0
   "Always increasing index into the annotation face lists.
@@ -232,7 +250,7 @@ Annotations are shown alongside the buffer text and stored in a session
 database, leaving the file itself unchanged.
 
 \\{scholia-mode-map}"
-  :lighter " Sch"
+  :lighter (:eval (format " Sch:%s" (scholia-session-name)))
   (require 'scholia-core)
   (if scholia-mode
       (scholia-initialize)

@@ -24,21 +24,48 @@
 
 (require 'scholia-vars)
 
-;;;###autoload (autoload 'scholia-mode "scholia-vars" nil t)
-;;;###autoload (autoload 'scholia-session-create "scholia-session" nil t)
-;;;###autoload (autoload 'scholia-session-switch "scholia-session" nil t)
-;;;###autoload (autoload 'scholia-session-rename "scholia-session" nil t)
-;;;###autoload (autoload 'scholia-session-delete "scholia-session" nil t)
-;;;###autoload (autoload 'scholia-session-import "scholia-session" nil t)
-;;;###autoload (autoload 'scholia-session-export "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-mode "scholia-vars" nil t)
+;;;###autoload
+(autoload 'scholia-save-annotations "scholia-core" nil t)
+;;;###autoload
+(autoload 'scholia-annotate "scholia-core" nil t)
+;;;###autoload
+(autoload 'scholia-delete-annotation "scholia-core" nil t)
+;;;###autoload
+(autoload 'scholia-reply-to "scholia-core" nil t)
+;;;###autoload
+(autoload 'scholia-goto-next-annotation "scholia-core" nil t)
+;;;###autoload
+(autoload 'scholia-goto-previous-annotation "scholia-core" nil t)
+;;;###autoload
+(autoload 'scholia-session-create "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-switch "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-activate "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-deactivate "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-rename "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-delete "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-import "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-export "scholia-session" nil t)
 ;;;###autoload
 (autoload 'scholia-session-assign-project "scholia-session" nil t)
 ;;;###autoload
 (autoload 'scholia-session-load-assignments "scholia-session" nil t)
-;;;###autoload (autoload 'scholia-export "scholia-export" nil t)
-;;;###autoload (autoload 'scholia-search "scholia-search" nil t)
-;;;###autoload (autoload 'scholia-search-sends "scholia-search" nil t)
-;;;###autoload (autoload 'scholia-export-session "scholia-export" nil t)
+;;;###autoload
+(autoload 'scholia-export "scholia-export" nil t)
+;;;###autoload
+(autoload 'scholia-export-session "scholia-export" nil t)
+;;;###autoload
+(autoload 'scholia-search "scholia-search" nil t)
+;;;###autoload
+(autoload 'scholia-search-sends "scholia-search" nil t)
 ;;;###autoload
 (autoload 'scholia-org-remark-export "scholia-org-remark" nil t)
 

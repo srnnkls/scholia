@@ -73,6 +73,47 @@ the project rung would never be reached."
         (scholia-core--project-session)
         (scholia-session-default-name))))
 
+(defun scholia-effective-sessions ()
+  "Return this buffer's target and existing additional active sessions."
+  (let ((target (scholia-session-name)))
+    (delete-dups
+     (cons target
+           (seq-filter
+            (lambda (name)
+              (and (scholia-session-name-p name)
+                   (file-exists-p (scholia-session-file name))))
+            scholia-active-sessions)))))
+
+(defun scholia-core--color-offset (session)
+  "Return the configured colour offset for SESSION in this buffer."
+  (let* ((sessions (scholia-effective-sessions))
+         (index (or (seq-position sessions session #'equal) 0))
+         (cycle scholia-session-color-cycle))
+    (if cycle (nth (mod index (length cycle)) cycle) 0)))
+
+(defun scholia-core--session-state (session)
+  "Return the mutable state plist for SESSION in this buffer."
+  (or (cdr (assoc-string session scholia--session-state))
+      (let ((state (list :unplaced nil :hidden nil
+                         :color-offset
+                         (scholia-core--color-offset session))))
+        (push (cons session state) scholia--session-state)
+        state)))
+
+(defun scholia-core--state-get (session property)
+  "Return PROPERTY from SESSION's buffer state."
+  (plist-get (scholia-core--session-state session) property))
+
+(defun scholia-core--state-put (session property value)
+  "Set PROPERTY to VALUE in SESSION's buffer state."
+  (let* ((entry (assoc-string session scholia--session-state))
+         (state (or (cdr entry) (scholia-core--session-state session))))
+    (setq state (plist-put state property value))
+    (if entry
+        (setcdr entry state)
+      (setcdr (assoc-string session scholia--session-state) state))
+    value))
+
 (defun scholia-session-name-p (name)
   "Return non-nil when NAME names a file of `scholia-session-directory'.
 A name carrying a directory part resolves outside that directory, where
@@ -160,18 +201,25 @@ however often it is stored and whatever the edits in between."
           (scholia-db--with-fields annotation :revision revision)
         annotation))))
 
-(defun scholia-core--buffer-annotations ()
-  "Return one annotation per chain of this buffer, in buffer order."
-  (mapcar #'scholia-core--chain-annotation (scholia-buffer-chains)))
+(defun scholia-core--buffer-annotations (&optional owner)
+  "Return one annotation per chain, optionally restricted to OWNER."
+  (mapcar #'scholia-core--chain-annotation
+          (if owner
+              (seq-filter (lambda (chain)
+                            (equal (or (scholia-chain-owner chain)
+                                       (scholia-session-name))
+                                   owner))
+                          (scholia-buffer-chains))
+            (scholia-buffer-chains))))
 
-(defun scholia-core--restore (annotation)
-  "Render ANNOTATION in this buffer with the colour and id it carries.
-Returns the chain drawn, or nil when the range it covers left nothing to
-draw on."
-  (let ((chain (scholia-create-chain (scholia-db-annotation-beg annotation)
-                                     (scholia-db-annotation-end annotation)
-                                     (scholia-db-annotation-text annotation)
-                                     (scholia-db-annotation-color annotation))))
+(defun scholia-core--restore (annotation owner)
+  "Render ANNOTATION for OWNER with the colour and id it carries."
+  (let ((chain (scholia-create-chain
+                (scholia-db-annotation-beg annotation)
+                (scholia-db-annotation-end annotation)
+                (scholia-db-annotation-text annotation)
+                (scholia-db-annotation-color annotation)
+                owner)))
     (when chain
       (put (overlay-get (car chain) 'scholia--chain-id)
            'scholia-core--id
@@ -186,43 +234,48 @@ draw on."
 
 ;;;; Storing
 
-(defun scholia-core--store (annotations)
-  "Store ANNOTATIONS grouped by the source files their positions resolve to."
-  (let ((groups nil)
-        (unresolved nil)
-        (replies (seq-filter #'scholia-db-annotation-reply-p annotations)))
+(defun scholia-core--store (annotations &optional session)
+  "Store ANNOTATIONS for their source views in SESSION."
+  (let* ((session (or session (scholia-session-name)))
+         (groups nil)
+         (unresolved nil)
+         (replies (seq-filter #'scholia-db-annotation-reply-p annotations))
+         (current (scholia-locate-source 'capture (point-min)))
+         (current-source (plist-get current :source-id)))
     (dolist (annotation
              (seq-remove #'scholia-db-annotation-reply-p annotations))
-      (let ((location (run-hook-with-args-until-success
-                       'scholia-location-functions
-                       (scholia-db-annotation-beg annotation))))
-        (if-let ((file (plist-get location :file)))
-            (let* ((fields (copy-sequence location)))
+      (let ((location (scholia-locate-source
+                       'capture (scholia-db-annotation-beg annotation))))
+        (if-let ((source (plist-get location :source-id)))
+            (let ((fields (copy-sequence location)))
               (when (and (scholia-db-annotation-revision annotation)
                          (not (plist-get fields :revision)))
                 (cl-remf fields :revision))
               (cl-remf fields :file)
               (setq annotation
                     (apply #'scholia-db--with-fields annotation fields))
+              (setq annotation
+                    (apply #'scholia-db--with-fields annotation
+                           (scholia-locate-source 'context location)))
               (let* ((source-view
-                      (list file (scholia-db-annotation-revision annotation)))
+                      (list source
+                            (scholia-db-annotation-revision annotation)))
                      (group (or (assoc source-view groups)
                                 (car (push (list source-view) groups)))))
-                (when (or (not (equal file (scholia-buffer-file)))
+                (when (or (not (equal source current-source))
                           (scholia-db-annotation-revision annotation))
                   (setq annotation
-                        (scholia-db-annotation-set-bounds annotation nil nil)))
+                        (scholia-db-annotation-set-bounds
+                         annotation nil nil)))
                 (setcdr group (cons annotation (cdr group)))))
           (push annotation unresolved))))
     (if unresolved
         (scholia-core--report
-         "Annotations can not be saved: no location resolver claimed buffer %S"
+         "Annotations can not be saved: no source claimed buffer %S"
          (buffer-name))
       (unless groups
-        (when-let ((location (run-hook-with-args-until-success
-                              'scholia-location-functions (point-min))))
-          (push (list (list (plist-get location :file)
-                            (plist-get location :revision)))
+        (when current-source
+          (push (list (list current-source (plist-get current :revision)))
                 groups)))
       (dolist (reply replies)
         (let ((group
@@ -238,28 +291,48 @@ draw on."
           (when group (setcdr group (cons reply (cdr group))))))
       (if (not groups)
           (scholia-core--report
-          "Annotations can not be saved: no location resolver claimed buffer %S"
+           "Annotations can not be saved: no source claimed buffer %S"
            (buffer-name))
         (dolist (group groups)
           (let* ((source-view (car group))
-                 (file (car source-view))
+                 (source (car source-view))
                  (revision (cadr source-view))
-                 (additive (not (equal file (scholia-buffer-file))))
-                 (located (append (nreverse (cdr group))
-                                  (and (equal file (scholia-buffer-file))
-                                       scholia--hidden-revision-annotations))))
-            (scholia-db-save (scholia-session-file) file located
-                             (scholia-buffer-checksum)
-                             (unless additive scholia--unplaced-annotations)
-                             additive revision)))))))
+                 (additive (not (equal source current-source)))
+                 (roots (nreverse (cdr group)))
+                 (snapshot (and roots
+                                (scholia-db-annotation-beg (car roots))
+                                (scholia-locate-source
+                                 'snapshot
+                                 (scholia-locate-source
+                                  'capture
+                                  (scholia-db-annotation-beg (car roots))))))
+                 (roots (if snapshot
+                            (cons (apply #'scholia-db--with-fields
+                                         (car roots) snapshot)
+                                  (cdr roots))
+                          roots))
+                 (hidden (scholia-core--state-get session :hidden))
+                 (unplaced (scholia-core--state-get session :unplaced))
+                 (located (append roots
+                                  (and (equal source current-source) hidden))))
+            (when (equal session (scholia-session-name))
+              (setq hidden (or hidden scholia--hidden-revision-annotations)
+                    unplaced (or unplaced scholia--unplaced-annotations))
+              (setq located (append roots
+                                    (and (equal source current-source)
+                                         hidden))))
+            (let ((scholia-db--source-context-p t))
+              (scholia-db-save
+               (scholia-session-file session) source located
+               (scholia-buffer-checksum)
+               (unless additive unplaced) additive revision))))))))
 
 (defun scholia-save-annotations ()
-  "Store the annotations of this buffer into its session.
-A buffer left without a chain stores a record holding none rather than
-losing its record, which a later session would read as a file that was
-never annotated."
+  "Store every visible session's annotations under their owners."
   (interactive)
-  (scholia-core--store (scholia-core--buffer-annotations)))
+  (dolist (session (scholia-effective-sessions))
+    (scholia-core--store
+     (scholia-core--buffer-annotations session) session)))
 
 (defun scholia-core--annotated-buffers ()
   "Return the buffers command `scholia-mode' is on in."
@@ -313,20 +386,17 @@ two read as a single underline where they meet."
           (max scholia--colors-index-counter
                (1+ (scholia-chain-color-index chain))))))
 
-(defun scholia-core--restore-placed (placed)
-  "Render the annotations of PLACED, one leaving the preserve list per draw.
-An annotation leaves `scholia--unplaced-annotations' only once a chain
-of it stands in the buffer, so a render that signals partway leaves
-everything it did not reach preserved and the next save keeps it.
-Replies carry no position and so nothing to render; the record store
-folds them back on its own and they never enter the preserve list."
+(defun scholia-core--restore-placed (placed owner)
+  "Render PLACED for OWNER and update its preservation state."
   (dolist (annotation (seq-remove #'scholia-db-annotation-reply-p placed))
-    (when (scholia-core--restore annotation)
+    (when (scholia-core--restore annotation owner)
       (let ((id (scholia-db-annotation-id annotation)))
-        (setq scholia--unplaced-annotations
-              (seq-remove (lambda (candidate)
-                            (equal (scholia-db-annotation-id candidate) id))
-                          scholia--unplaced-annotations))))))
+        (scholia-core--state-put
+         owner :unplaced
+         (seq-remove
+          (lambda (candidate)
+            (equal (scholia-db-annotation-id candidate) id))
+          (scholia-core--state-get owner :unplaced)))))))
 
 (defun scholia-core--fall-back-to-default ()
   "Bind this buffer to the default session when the one it names is unusable.
@@ -354,62 +424,69 @@ naming the session itself still gets the signal from
                               name fallback)
         (setq-local scholia-session fallback))))))
 
+(defun scholia-core--initialize-session (session source revision checksum)
+  "Restore SESSION's annotations for SOURCE at REVISION and CHECKSUM."
+  (let* ((record (or (scholia-db-record (scholia-session-file session) source)
+                     (scholia-db-make-record source nil nil)))
+         (annotations (seq-remove #'scholia-db-annotation-reply-p
+                                  (scholia-db-record-annotations record)))
+         (hidden (and (not revision)
+                      (not scholia-show-revision-annotations)
+                      (seq-filter #'scholia-db-annotation-revision
+                                  annotations)))
+         (visible (if revision
+                      (seq-filter
+                       (lambda (annotation)
+                         (equal (scholia-db-annotation-revision annotation)
+                                revision))
+                       annotations)
+                    (seq-difference annotations hidden))))
+    (scholia-core--session-state session)
+    (scholia-core--state-put session :hidden hidden)
+    (scholia-core--state-put session :unplaced visible)
+    (scholia-core--restore-placed
+     (scholia-db-buffer-annotations
+      (scholia-db-make-record
+       source visible
+       (if revision checksum (scholia-db-record-checksum record)))
+      checksum)
+     session)
+    (when hidden
+      (scholia-core--report
+       (concat "%d revision annotations hidden; set "
+               "scholia-show-revision-annotations to show them")
+       (length hidden)))
+    (let ((unplaced (scholia-core--state-get session :unplaced)))
+      (when unplaced
+        (scholia-core--report
+         "%s changed on disk: %s kept but not shown"
+         source
+         (mapconcat
+          (lambda (annotation)
+            (format "%S (its text %S is gone)"
+                    (scholia-db-annotation-text annotation)
+                    (scholia-db-annotation-annotated-text annotation)))
+          unplaced ", "))))
+    (when (equal session (scholia-session-name))
+      (setq scholia--hidden-revision-annotations hidden
+            scholia--unplaced-annotations
+            (scholia-core--state-get session :unplaced)))))
+
 (defun scholia-initialize ()
-  "Render the annotations stored for this buffer and arm the save on kill.
-The save is armed before anything is read, so a read that signals still
-leaves the buffer able to store what it holds.  A buffer already holding
-chains is left alone, so enabling the mode twice does not draw a second
-copy of every annotation over the first.  Every stored annotation counts
-as unplaced until a chain of it stands in the buffer, so whatever the
-render did not reach is reported by name and kept in the record."
+  "Render every effective session and arm saving for this buffer."
   (scholia-core--fall-back-to-default)
   (add-hook 'kill-buffer-hook #'scholia-core--save-on-kill nil t)
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
-  (let* ((location (run-hook-with-args-until-success
-                    'scholia-location-functions (point-min)))
-         (file (plist-get location :file))
-         (revision (plist-get location :revision)))
-    (when (and file (not (scholia-buffer-chains)))
-      (let* ((record (scholia-db-record (scholia-session-file) file))
-             (annotations (seq-remove #'scholia-db-annotation-reply-p
-                                      (scholia-db-record-annotations record)))
-             (hidden (and (not revision)
-                          (not scholia-show-revision-annotations)
-                          (seq-filter #'scholia-db-annotation-revision
-                                      annotations)))
-             (visible (if revision
-                          (seq-filter (lambda (annotation)
-                                        (equal (scholia-db-annotation-revision
-                                                annotation)
-                                               revision))
-                                      annotations)
-                        (seq-difference annotations hidden)))
-             (checksum (scholia-buffer-checksum)))
-        (setq scholia--hidden-revision-annotations hidden
-              scholia--unplaced-annotations visible)
-        (scholia-core--restore-placed
-         (scholia-db-buffer-annotations
-          (scholia-db-make-record file visible
-                                  (if revision
-                                      checksum
-                                    (scholia-db-record-checksum record)))
-          checksum))
-        (when hidden
-          (scholia-core--report
-           (concat "%d revision annotations hidden; set "
-                   "scholia-show-revision-annotations to show them")
-           (length hidden)))
-        (when scholia--unplaced-annotations
-          (scholia-core--report
-           "%s changed on disk: %s kept but not shown"
-           (file-name-nondirectory file)
-           (mapconcat
-            (lambda (annotation)
-              (format "%S (its text %S is gone)"
-                      (scholia-db-annotation-text annotation)
-                      (scholia-db-annotation-annotated-text annotation)))
-            scholia--unplaced-annotations
-            ", ")))
+  (unless (scholia-buffer-chains)
+    (setq scholia--session-state nil)
+    (let* ((location (scholia-locate-source 'capture (point-min)))
+           (source (plist-get location :source-id))
+           (revision (plist-get location :revision))
+           (checksum (scholia-buffer-checksum)))
+      (when source
+        (dolist (session (scholia-effective-sessions))
+          (scholia-core--initialize-session
+           session source revision checksum))
         (scholia-core--advance-colors (scholia-buffer-chains))))))
 
 (defun scholia-shutdown (save)
@@ -429,6 +506,9 @@ only once no annotated buffer is left to need it."
     (dolist (overlay chain)
       (delete-overlay overlay)))
   (scholia-disarm-rechaining)
+  (setq scholia--session-state nil
+        scholia--unplaced-annotations nil
+        scholia--hidden-revision-annotations nil)
   (remove-hook 'kill-buffer-hook #'scholia-core--save-on-kill t)
   (scholia-core--disarm-quit-save))
 
@@ -447,28 +527,39 @@ The region answers while it is active and the symbol at point otherwise."
       (cons (region-beginning) (region-end))
     (bounds-of-thing-at-point 'symbol)))
 
-(defun scholia-core--annotated-range-p (beg end)
-  "Return non-nil when an annotation of this buffer reaches into BEG to END."
-  (seq-find #'scholia-annotation-p (overlays-in beg end)))
+(defun scholia-core--annotated-range-p (beg end owner)
+  "Return non-nil when OWNER has an annotation reaching BEG to END."
+  (seq-find
+   (lambda (overlay)
+     (and (scholia-annotation-p overlay)
+          (equal (overlay-get overlay 'scholia--owner) owner)))
+   (overlays-in beg end)))
 
-(defun scholia-annotate (&optional text)
-  "Annotate the region, or the symbol at point when no region is active.
-TEXT is the note, asked for when it is not given.  Nothing to annotate
-at point, a range holding no line text to hang a chain on, a range an
-annotation already reaches into, and an empty note each create no
-annotation, spend no colour, and report instead: the lookup
-`scholia-annotation-at' does reads one annotation per position, and an
-empty note would hold a range against that lookup while showing nothing
-and exporting as an empty diagnostic.  A region annotated is
-deactivated, so the chord pressed twice cannot annotate it twice."
-  (interactive)
-  (let ((bounds (scholia-core--bounds)))
+(defun scholia-core--read-owner (prompt &optional alternate)
+  "Read a session owner using PROMPT.
+When ALTERNATE is non-nil, omit the current write target."
+  (let ((sessions (if alternate
+                      (delete (scholia-session-name)
+                              (copy-sequence (scholia-effective-sessions)))
+                    (scholia-effective-sessions))))
+    (unless sessions (user-error "No alternate session is active"))
+    (completing-read prompt sessions nil t)))
+
+(defun scholia-annotate (&optional text owner)
+  "Annotate the active region or symbol with TEXT for OWNER.
+OWNER defaults to the buffer's resolved write target.  Interactively, a
+prefix selects another effective session."
+  (interactive
+   (list nil (and current-prefix-arg
+                  (scholia-core--read-owner "Annotate in session: " t))))
+  (let ((bounds (scholia-core--bounds))
+        (owner (or owner (scholia-session-name))))
     (cond
      ((not bounds)
       (scholia-core--report "Nothing to annotate at point"))
      ((not (scholia-overlay--line-segments (car bounds) (cdr bounds)))
       (scholia-core--report "Nothing to annotate: no text on any line here"))
-     ((scholia-core--annotated-range-p (car bounds) (cdr bounds))
+     ((scholia-core--annotated-range-p (car bounds) (cdr bounds) owner)
       (scholia-core--report "Annotations can not overlap: %s is annotated"
                             (buffer-substring-no-properties (car bounds)
                                                             (cdr bounds))))
@@ -479,32 +570,53 @@ deactivated, so the chord pressed twice cannot annotate it twice."
                         (scholia-ui-read-annotation)))))
         (if (string= note "")
             (scholia-core--report "Annotation text is empty")
-          (scholia-create-chain (car bounds) (cdr bounds) note)
+          (scholia-core--session-state owner)
+          (scholia-create-chain (car bounds) (cdr bounds) note nil owner)
           (deactivate-mark)))))))
 
+(defun scholia-core--chain-candidate (chain)
+  "Return the completion candidate identifying CHAIN."
+  (format "%s — %s — [%s]"
+          (scholia-chain-owner chain)
+          (overlay-get (car chain) 'scholia-annotation)
+          (scholia-core--chain-id chain)))
+
+(defun scholia-core--select-chain ()
+  "Return the chain selected among annotations at point."
+  (let ((chains (scholia-chains-at)))
+    (cond
+     ((null chains) nil)
+     ((null (cdr chains)) (car chains))
+     (t
+      (let* ((candidates
+              (mapcar (lambda (chain)
+                        (cons (scholia-core--chain-candidate chain) chain))
+                      chains))
+             (selected
+              (completing-read "Annotation: " candidates nil t)))
+        (cdr (assoc-string selected candidates)))))))
+
 (defun scholia-delete-annotation ()
-  "Delete the annotation at point, every overlay of its chain with it."
+  "Delete the selected annotation at point."
   (interactive)
-  (let ((overlay (scholia-annotation-at)))
-    (if overlay
-        (scholia-delete-chain overlay)
-      (scholia-core--report "No annotation at point"))))
+  (if-let ((chain (scholia-core--select-chain)))
+      (mapc #'delete-overlay chain)
+    (scholia-core--report "No annotation at point")))
 
 (defun scholia-reply-to (&optional text)
-  "Answer the annotation at point with TEXT, asked for when not given.
-A reply holds no position of its own, so nothing on screen would keep it
-and it is stored as it is made."
+  "Store a reply with TEXT under the selected annotation at point."
   (interactive)
-  (let ((chain (scholia-chain-at (point))))
-    (if (not chain)
-        (scholia-core--report "No annotation at point")
-      (scholia-core--store
-       (append (scholia-core--buffer-annotations)
-               (list (scholia-db-make-annotation
-                      (scholia-core--make-id)
-                      (or text (read-string "Reply: "))
-                      nil nil nil nil nil
-                      (scholia-core--chain-id chain))))))))
+  (if-let ((chain (scholia-core--select-chain)))
+      (let ((owner (scholia-chain-owner chain)))
+        (scholia-core--store
+         (append (scholia-core--buffer-annotations owner)
+                 (list (scholia-db-make-annotation
+                        (scholia-core--make-id)
+                        (or text (read-string "Reply: "))
+                        nil nil nil nil nil
+                        (scholia-core--chain-id chain))))
+         owner))
+    (scholia-core--report "No annotation at point")))
 
 (defun scholia-goto-next-annotation ()
   "Move point to the annotation after it, staying put when there is none."

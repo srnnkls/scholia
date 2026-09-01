@@ -567,24 +567,24 @@ Emacs whose ERT sets the variable."
                         (scholia-core-test--stored session file))
                        '("on beta" "on gamma")))))))
 
-(ert-deftest scholia-core-a-buffer-visiting-no-file-stores-nothing ()
+(ert-deftest scholia-core-a-buffer-visiting-no-file-stores-a-generic-source ()
   (scholia-test-with-session-directory
     (with-temp-buffer
       (insert "alpha beta\n")
       (setq-local scholia-session "no-file")
-      (setq-local scholia-use-messages t)
       (let ((session (scholia-session-file)))
         (scholia-mode 1)
         (goto-char (point-min))
         (scholia-annotate "on alpha")
-        (let ((reported (scholia-core-test--reported
-                          (scholia-save-annotations))))
-          (should (stringp reported))
-          (should (string-match-p "can not be saved" reported)))
-        (should-not (file-exists-p session))
+        (scholia-save-annotations)
+        (should (file-exists-p session))
+        (let ((sources (scholia-db-files session)))
+          (should (= (length sources) 1))
+          (should (equal (scholia-core-test--texts
+                          (scholia-core-test--stored session (car sources)))
+                         '("on alpha"))))
         (let ((scholia-autosave t))
-          (scholia-mode -1))
-        (should-not (file-exists-p session))))))
+          (scholia-mode -1))))))
 
 
 ;;;; The identity a chain keeps
@@ -655,6 +655,74 @@ Emacs whose ERT sets the variable."
           (should (equal (scholia-db-annotation-line loaded) 2))
           (should (equal (scholia-db-annotation-column loaded) 0))
           (should (equal (scholia-db-annotation-line-text loaded) "gamma delta")))))))
+
+(ert-deftest scholia-multisession-non-file-source-saves-reloads-and-exports-fallbacks ()
+  (let* ((globals '(scholia-session
+                    scholia-active-sessions
+                    scholia-autosave
+                    scholia-source-snapshot-mode
+                    scholia-source-snapshot-limit))
+         (snapshot (mapcar (lambda (symbol)
+                             (list symbol
+                                   (boundp symbol)
+                                   (and (boundp symbol) (default-value symbol))))
+                           globals)))
+    (unwind-protect
+        (progn
+          (set-default 'scholia-session nil)
+          (set-default 'scholia-active-sessions nil)
+          (set-default 'scholia-autosave nil)
+          (set-default 'scholia-source-snapshot-mode 'bounded-full)
+          (cl-labels
+              ((exercise (name source limit expected-status omitted)
+                 (scholia-test-with-session-directory
+                   (set-default 'scholia-source-snapshot-limit limit)
+                   (let (session)
+                     (cl-letf (((symbol-function 'completing-read)
+                                (lambda (&rest _)
+                                  (error "A zero-config source asked for a session")))
+                               ((symbol-function 'read-string)
+                                (lambda (&rest _)
+                                  (error "A zero-config source asked for input")))
+                               ((symbol-function 'y-or-n-p)
+                                (lambda (&rest _)
+                                  (error "A zero-config source asked for confirmation"))))
+                       (with-temp-buffer
+                         (rename-buffer name t)
+                         (insert source)
+                         (text-mode)
+                         (scholia-mode 1)
+                         (goto-char (point-min))
+                         (scholia-annotate "memory note")
+                         (scholia-save-annotations)
+                         (setq session (scholia-session-file))
+                         (should (= 1 (length (scholia-db-files session))))
+                         (scholia-mode -1)
+                         (should-not (scholia-buffer-chains))
+                         (scholia-mode 1)
+                         (should (equal (mapcar #'scholia-core-test--chain-text
+                                               (scholia-buffer-chains))
+                                        '("memory note")))
+                         (scholia-mode -1)))
+                     (let ((output (scholia-export-session "default" nil 'integrate)))
+                       (should (string-match-p (regexp-quote name) output))
+                       (should (string-match-p "text-mode" output))
+                       (should (string-match-p expected-status output))
+                       (should (string-match-p "alpha beta" output))
+                       (if omitted
+                           (should-not (string-match-p (regexp-quote omitted) output))
+                         (should (string-match-p "FULL-SNAPSHOT-TAIL" output))))))))
+            (exercise "scholia-full-memory"
+                      "alpha beta\nFULL-SNAPSHOT-TAIL\n"
+                      1024 "\\bfull\\b" nil)
+            (exercise "scholia-excerpt-memory"
+                      "alpha beta\ncontent beyond the bounded snapshot\nEXCERPT-OMITTED-TAIL\n"
+                      16 "\\bexcerpt\\b.*\\btruncated\\b"
+                      "EXCERPT-OMITTED-TAIL")))
+      (dolist (entry snapshot)
+        (if (nth 1 entry)
+            (set-default (nth 0 entry) (nth 2 entry))
+          (makunbound (nth 0 entry)))))))
 
 (provide 'scholia-core-test)
 ;;; scholia-core-test.el ends here

@@ -60,12 +60,12 @@
           (goto-char (point-min))
           (search-forward "keep root")
           (let ((section (magit-current-section)))
-            (should (equal (magit-section-value section) root))
-            (should (equal (magit-section-value (magit-section-parent section))
+            (should (equal (scholia-status--section-value section) root))
+            (should (equal (scholia-status--section-value (scholia-status--section-parent section))
                            "/tmp/one.el"))
-            (should (equal (magit-section-value
-                            (magit-section-parent
-                             (magit-section-parent section)))
+            (should (equal (scholia-status--section-value
+                            (scholia-status--section-parent
+                             (scholia-status--section-parent section)))
                            "alpha")))))
       (let ((buffer (scholia-status-filter "text:keep")))
         (should (equal received "text:keep"))
@@ -77,12 +77,12 @@
           (goto-char (point-min))
           (search-forward "keep reply")
           (let ((section (magit-current-section)))
-            (should (equal (magit-section-value section) reply))
-            (should (equal (magit-section-value (magit-section-parent section))
+            (should (equal (scholia-status--section-value section) reply))
+            (should (equal (scholia-status--section-value (scholia-status--section-parent section))
                            "/tmp/one.el"))
-            (should (equal (magit-section-value
-                            (magit-section-parent
-                             (magit-section-parent section)))
+            (should (equal (scholia-status--section-value
+                            (scholia-status--section-parent
+                             (scholia-status--section-parent section)))
                            "alpha"))))))))
 
 (ert-deftest scholia-status-02-dispatches-marked-session-actions ()

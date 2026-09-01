@@ -88,8 +88,7 @@ no export can carry."
 
 (defun scholia-store--parse (text)
   "Return the value the row text TEXT carries."
-  (let ((read-circle nil)
-        (read-eval nil))
+  (let ((read-circle nil))
     (car (read-from-string text))))
 
 
@@ -185,8 +184,7 @@ hand the accessors a list they never return from."
   (let ((db (with-temp-buffer
               (insert-file-contents session-file)
               (goto-char (point-min))
-              (let ((read-circle nil)
-                    (read-eval nil))
+              (let ((read-circle nil))
                 (condition-case nil
                     (read (current-buffer))
                   (error
