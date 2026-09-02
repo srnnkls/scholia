@@ -22,7 +22,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-overlay nil t)
   (require 'scholia-db nil t)
@@ -31,6 +32,10 @@
   (require 'scholia-session nil t)
   (with-demoted-errors "scholia-search unloadable: %S"
     (require 'scholia-search nil t)))
+
+(eval-when-compile
+  (when (bound-and-true-p byte-compile-current-file)
+    (require 'scholia-status)))
 
 (defun scholia-search-test--require ()
   "Load `scholia-search' inside the test rather than beside it.
@@ -279,8 +284,8 @@ one and it lands nowhere."
                            (mapcar #'scholia-db-annotation-text
                                    (scholia-db-record-annotations
                                     (scholia-db-record
-                                     (scholia-session-file "here") there)))))
-        (scholia-search-test--forget here there))))))
+                                     (scholia-session-file "here") there))))))
+        (scholia-search-test--forget here there)))))
 
 (ert-deftest scholia-search-announces-a-completion-category ()
   "The collection the command offers is categorised as `scholia-annotation'.
@@ -443,13 +448,13 @@ sends the reader to a place nobody annotated."
                         "revision-id" "revision note" "revision" 8 16)))
       (should (zerop (process-file "git" nil nil nil "-C" directory "init" "-q")))
       (should (zerop (process-file "git" nil nil nil "-C" directory "config"
-                                  "user.email" "test@example.invalid")))
+                                   "user.email" "test@example.invalid")))
       (should (zerop (process-file "git" nil nil nil "-C" directory "config"
-                                  "user.name" "Scholia Test")))
+                                   "user.name" "Scholia Test")))
       (should (zerop (process-file "git" nil nil nil "-C" directory "add"
-                                  (file-name-nondirectory file))))
+                                   (file-name-nondirectory file))))
       (should (zerop (process-file "git" nil nil nil "-C" directory "commit" "-q"
-                                  "-m" "revision fixture")))
+                                   "-m" "revision fixture")))
       (setq revision
             (with-temp-buffer
               (should (zerop (process-file "git" nil (current-buffer) nil "-C"
@@ -525,17 +530,17 @@ sends the reader to a place nobody annotated."
     (let* ((alpha-file (scholia-search-test--source "alpha.txt" "alpha\n"))
            (beta-file (scholia-search-test--source "beta.txt" "beta\n"))
            (alpha-send (scholia-db-make-send :kind 'agent
-                                              :target "claude-alpha"
-                                              :label "Claude · Alpha"
-                                              :herdr-session "review"
-                                              :format 'rustc
-                                              :scope 'file))
-           (beta-send (scholia-db-make-send :kind 'agent
-                                             :target "claude-beta"
-                                             :label "Claude · Beta"
+                                             :target "claude-alpha"
+                                             :label "Claude · Alpha"
                                              :herdr-session "review"
                                              :format 'rustc
                                              :scope 'file))
+           (beta-send (scholia-db-make-send :kind 'agent
+                                            :target "claude-beta"
+                                            :label "Claude · Beta"
+                                            :herdr-session "review"
+                                            :format 'rustc
+                                            :scope 'file))
            (alpha (plist-put (scholia-search-test--annotation
                               "alpha-id" "alpha note" "alpha" 1 6)
                              :sends (list alpha-send)))
@@ -557,11 +562,11 @@ sends the reader to a place nobody annotated."
   (scholia-search-test--with-state
     (let* ((file (scholia-search-test--source "thread.txt" "alpha beta\n"))
            (send (scholia-db-make-send :kind 'agent
-                                        :target "claude-planner"
-                                        :label "Claude · Planner"
-                                        :herdr-session "sprint-7"
-                                        :format 'rustc
-                                        :scope 'file))
+                                       :target "claude-planner"
+                                       :label "Claude · Planner"
+                                       :herdr-session "sprint-7"
+                                       :format 'rustc
+                                       :scope 'file))
            (parent (scholia-search-test--annotation
                     "parent" "parent note" "alpha" 1 6))
            (reply (plist-put (scholia-search-test--reply

@@ -19,13 +19,24 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t)
   (require 'scholia-overlay nil t)
   (require 'scholia-thread nil t)
   (require 'scholia-core nil t)
   (require 'scholia-export nil t))
+
+(eval-when-compile
+  (when (bound-and-true-p byte-compile-current-file)
+    (require 'scholia-search)
+    (require 'scholia-status)))
+
+(declare-function scholia-org-remark-export "scholia-org-remark")
+(declare-function scholia-search-annotations "scholia-search")
+(declare-function scholia-search-candidate-string "scholia-search")
+(declare-function scholia-status "scholia-status")
 
 (defconst scholia-export-test--source
   "alpha beta\n    gamma delta\nepsilon zeta\n"
@@ -709,10 +720,10 @@ sorted globally reads f1 f2 f3 f4."
   (scholia-test-with-session-directory
     (scholia-export-test--with-directory directory
       (let* ((file (scholia-export-test--write directory "revision.txt"
-                                                scholia-export-test--source))
+                                               scholia-export-test--source))
              (revision "0123456789abcdef0123456789abcdef01234567")
              (annotation (scholia-export-test--annotation "revision-id"
-                                                           "revision note"))
+                                                          "revision note"))
              (record nil))
         (plist-put annotation :revision revision)
         (setq record (scholia-db-make-record
@@ -823,10 +834,12 @@ sorted globally reads f1 f2 f3 f4."
                                            (string-match-p "beta" candidate))
                                          offered)
                                (error "No beta export owner")))))
-                (let* ((prefix-arg '(4))
-                       (_ (execute-extended-command prefix-arg "scholia-export"))
-                       (selected (with-current-buffer scholia-export-buffer-name
-                                   (buffer-string))))
+                (let* ((current-prefix-arg '(4))
+                       (selected
+                        (progn
+                          (call-interactively #'scholia-export)
+                          (with-current-buffer scholia-export-buffer-name
+                            (buffer-string)))))
                   (should (= prompted 1))
                   (should (seq-some (lambda (candidate)
                                       (string-match-p "alpha" candidate))

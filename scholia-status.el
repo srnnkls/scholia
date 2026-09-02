@@ -58,16 +58,15 @@
          (file-section (scholia-status--section-parent section))
          (file (scholia-status--section-value file-section))
          (session (scholia-status--section-value (scholia-status--section-parent file-section))))
-    (list :session session
-          :file file
-          :record (scholia-db-record (scholia-session-file session) file)
-          :annotation annotation)))
+    (scholia-db-make-entry
+     session file (scholia-db-record (scholia-session-file session) file)
+     annotation)))
 
 (defun scholia-status--entry-key (entry)
   "Return the stable key identifying ENTRY."
-  (list (plist-get entry :session)
-        (plist-get entry :file)
-        (scholia-db-annotation-id (plist-get entry :annotation))))
+  (list (scholia-db-entry-session entry)
+        (scholia-db-entry-file entry)
+        (scholia-db-annotation-id (scholia-db-entry-annotation entry))))
 
 (defun scholia-status--marked-entries ()
   "Return the current entries selected by marked hunk keys."
@@ -98,7 +97,7 @@
 (defun scholia-status--hunks ()
   "Return the selected hunk sections, or the hunk at point."
   (or (magit-region-sections 'hunk t)
-      (when-let ((section (scholia-status--hunk-at-point))) (list section))))
+      (when-let* ((section (scholia-status--hunk-at-point))) (list section))))
 
 (defun scholia-status--selected-entries ()
   "Return marked entries, or entries represented by the current hunks."
@@ -109,8 +108,8 @@
   "Return ENTRIES grouped by session and file in their original order."
   (let (sessions)
     (dolist (entry entries)
-      (let* ((session (plist-get entry :session))
-             (file (plist-get entry :file))
+      (let* ((session (scholia-db-entry-session entry))
+             (file (scholia-db-entry-file entry))
              (session-group (assoc-string session sessions))
              (files (cdr session-group))
              (file-group (assoc-string file files)))
@@ -136,13 +135,13 @@
             (magit-insert-section (file file)
               (magit-insert-heading "  %s\n" file)
               (scholia-thread-walk
-               (mapcar (lambda (entry) (plist-get entry :annotation)) entries)
+               (mapcar (lambda (entry) (scholia-db-entry-annotation entry)) entries)
                (lambda (annotation depth)
                  (magit-insert-section (hunk annotation)
                    (insert (make-string (* depth 2) ?\s))
                    (insert (scholia-db-annotation-text annotation)
-                           (if-let ((revision
-                                     (scholia-locate-revision annotation)))
+                           (if-let* ((revision
+                                      (scholia-locate-revision annotation)))
                                (format " [%s]" revision)
                              "")
                            "\n")))))))))))
@@ -170,7 +169,6 @@
     (display-buffer buffer)
     buffer))
 
-;;;###autoload
 (defun scholia-status ()
   "Show annotations across all sessions."
   (interactive)
@@ -263,11 +261,11 @@
   (interactive (list (scholia-status--entry
                       (or (scholia-status--hunk-at-point)
                           (user-error "No annotation at point")))))
-  (let* ((session-file (scholia-session-file (plist-get entry :session)))
-         (record (plist-get entry :record))
-         (file (or (plist-get entry :file)
+  (let* ((session-file (scholia-session-file (scholia-db-entry-session entry)))
+         (record (scholia-db-entry-record entry))
+         (file (or (scholia-db-entry-file entry)
                    (and record (scholia-db-record-file record))))
-         (id (scholia-db-annotation-id (plist-get entry :annotation))))
+         (id (scholia-db-annotation-id (scholia-db-entry-annotation entry))))
     (when file
       (scholia-db-remove-annotation session-file file id))
     (when (derived-mode-p 'scholia-status-mode)
@@ -284,7 +282,7 @@
           (ids (mapcar (lambda (file-group)
                          (mapcar (lambda (entry)
                                    (scholia-db-annotation-id
-                                    (plist-get entry :annotation)))
+                                    (scholia-db-entry-annotation entry)))
                                  (cdr file-group)))
                        (cdr session-group))))
       (scholia-db-add-send-batch
@@ -294,9 +292,9 @@
   "Return ENTRIES grouped by source file and root source view."
   (let (groups)
     (dolist (entry entries)
-      (let* ((file (plist-get entry :file))
-             (annotation (plist-get entry :annotation))
-             (record (plist-get entry :record))
+      (let* ((file (scholia-db-entry-file entry))
+             (annotation (scholia-db-entry-annotation entry))
+             (record (scholia-db-entry-record entry))
              (revision (scholia-db--source-view
                         annotation (scholia-db-record-annotations record)))
              (key (list file revision))
@@ -307,30 +305,24 @@
         (setcdr group (append (cdr group) (list entry)))))
     groups))
 
-(defun scholia-status--insert-source (file revision annotations)
-  "Insert source FILE at REVISION using ANNOTATIONS for fallback access."
+(defun scholia-status--insert-source (file annotations)
+  "Insert source FILE using ANNOTATIONS for fallback access."
   (let* ((root (seq-find (lambda (annotation)
                            (not (scholia-db-annotation-reply-p annotation)))
                          annotations))
-         (access (or (plist-get root :access)
-                     (if revision
-                         (list :kind 'git :path file :revision revision)
-                       (list :kind 'file :path file))))
+         (access (scholia-locate-annotation-access root file))
          (retrieved (scholia-locate-source 'retrieve access annotations)))
-    (insert (plist-get retrieved :text))))
+    (insert (scholia-locate-retrieved-text retrieved))))
 
 (defun scholia-status--render-file (entries format)
   "Render ENTRIES against their root source view using FORMAT."
-  (let* ((file (plist-get (car entries) :file))
-         (annotations (mapcar (lambda (entry) (plist-get entry :annotation))
-                              entries))
-         (record (plist-get (car entries) :record))
-         (revision (scholia-db--source-view
-                    (car annotations)
-                    (scholia-db-record-annotations record))))
+  (let* ((file (scholia-db-entry-file (car entries)))
+         (annotations (mapcar (lambda (entry)
+                                (scholia-db-entry-annotation entry))
+                              entries)))
     (with-temp-buffer
       (let ((buffer-file-name file))
-        (scholia-status--insert-source file revision annotations)
+        (scholia-status--insert-source file annotations)
         (delay-mode-hooks (set-auto-mode))
         (scholia-export-render annotations format file)))))
 
@@ -351,7 +343,7 @@
     (require 'scholia-herdr nil t))
   (unless (fboundp 'scholia-herdr--send)
     (user-error "Scholia-herdr is unavailable"))
-  (let* ((annotations (mapcar (lambda (entry) (plist-get entry :annotation))
+  (let* ((annotations (mapcar (lambda (entry) (scholia-db-entry-annotation entry))
                               entries))
          (format (or scholia-herdr-send-format scholia-export-format))
          (payload (scholia-status--payload entries format)))

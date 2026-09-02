@@ -186,7 +186,7 @@ taken and `scholia-session-switch' opens all at once."
     (scholia-db--writing
      session-file
      (lambda (store)
-       (when-let ((record (scholia-store-record store file)))
+       (when-let* ((record (scholia-store-record store file)))
          (scholia-store-put-record
           store
           (scholia-db-make-record
@@ -209,6 +209,29 @@ save Emacs is about to make, nor revert it."
      (unless (scholia-store-record store file)
        (scholia-store-put-record store (scholia-db-make-record file nil nil)))
      (scholia-store-add-annotation store file reply))))
+
+
+;;;; Entries
+
+(defun scholia-db-make-entry (session file record annotation)
+  "Return a candidate entry for SESSION, FILE, RECORD, and ANNOTATION."
+  (list :session session :file file :record record :annotation annotation))
+
+(defun scholia-db-entry-session (entry)
+  "Return the session name carried by ENTRY."
+  (plist-get entry :session))
+
+(defun scholia-db-entry-file (entry)
+  "Return the source file or identity carried by ENTRY."
+  (plist-get entry :file))
+
+(defun scholia-db-entry-record (entry)
+  "Return the source record carried by ENTRY."
+  (plist-get entry :record))
+
+(defun scholia-db-entry-annotation (entry)
+  "Return the annotation carried by ENTRY."
+  (plist-get entry :annotation))
 
 
 ;;;; Annotations
@@ -276,6 +299,30 @@ covers no text, so it passes nil for BEG, END and ANNOTATED-TEXT."
 (defun scholia-db-annotation-revision (annotation)
   "Return the revision ANNOTATION describes, or nil for the working tree."
   (plist-get annotation :revision))
+
+(defun scholia-db-annotation-source-id (annotation)
+  "Return the source identity stored for ANNOTATION."
+  (plist-get annotation :source-id))
+
+(defun scholia-db-annotation-access (annotation)
+  "Return the source access descriptor stored for ANNOTATION."
+  (plist-get annotation :access))
+
+(defun scholia-db-annotation-set-access (annotation access)
+  "Return ANNOTATION carrying source ACCESS."
+  (scholia-db--with-fields annotation :access access))
+
+(defun scholia-db-annotation-snapshot (annotation)
+  "Return the full source snapshot stored for ANNOTATION, or nil."
+  (plist-get annotation :snapshot))
+
+(defun scholia-db-annotation-snapshot-status (annotation)
+  "Return the source snapshot status stored for ANNOTATION."
+  (plist-get annotation :snapshot-status))
+
+(defun scholia-db-annotation-snapshot-truncated-p (annotation)
+  "Return non-nil when ANNOTATION fell back from an oversized snapshot."
+  (and (plist-get annotation :snapshot-truncated) t))
 
 (defun scholia-db-annotation-reply-to (annotation)
   "Return the id of the annotation ANNOTATION answers, or nil."
@@ -382,22 +429,23 @@ with that record.")
               (scholia-db-record-annotations record))
              (scholia-db-record-checksum record)))))))))
 
-(defun scholia-db-send-batch (annotations send sender)
+(defun scholia-db-send-batch (annotations send sender &optional persist)
   "Return ANNOTATIONS carrying SEND once SENDER has taken them.
-SENDER is called once and with no arguments, and only a return of its
-own records anything: a signal it raises reaches the caller as it was
-raised, with ANNOTATIONS and the sends they already hold untouched and
-`scholia-send-functions' unrun.  Its members observe a send that already
-happened, so one of them signalling is reported rather than propagated:
-the annotations carrying the new record are the only copy of it and are
-returned either way."
+SENDER is called once and with no arguments.  If it returns, PERSIST is
+called with the updated annotations and SEND before `scholia-send-functions'
+observes them.  Persistence runs with keyboard quit deferred until its
+metadata is durable.  Ordinary observer errors are reported; keyboard quit
+and sender or persistence failures reach the caller."
   (funcall sender)
   (let ((sent (mapcar (lambda (annotation)
                         (scholia-db-annotation-add-send annotation send))
                       annotations)))
+    (when persist
+      (let ((inhibit-quit t))
+        (funcall persist sent send)))
     (condition-case failure
         (run-hook-with-args 'scholia-send-functions sent send)
-      ((error quit) (message "scholia: send observer failed: %S" failure)))
+      (error (message "scholia: send observer failed: %S" failure)))
     sent))
 
 
@@ -624,7 +672,7 @@ every other record where another writer left it."
   (equal (scholia-db--source-view annotation annotations) revision))
 
 (defun scholia-db--fold (store session-file file annotations checksum preserve
-                                additive source-view)
+                               additive source-view)
   "Fold ANNOTATIONS of FILE into the record STORE carries for it.
 SESSION-FILE names the session STORE was opened on, CHECKSUM
 fingerprints the buffer, PRESERVE holds stored annotations the caller could

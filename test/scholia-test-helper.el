@@ -14,6 +14,7 @@
 
 (require 'ert)
 (require 'seq)
+(require 'scholia)
 
 (defconst scholia-test-project-root
   (file-name-as-directory

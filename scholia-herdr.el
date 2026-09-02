@@ -88,13 +88,13 @@
 
 (defun scholia-herdr--send (annotations payload format scope persist)
   "Send ANNOTATIONS as PAYLOAD in FORMAT and SCOPE.
-Call PERSIST after success."
+Call PERSIST with durable send metadata after success."
   (let* ((entry (scholia-herdr--entry))
-         (send (scholia-herdr--send-record entry format scope))
-         (sent (scholia-db-send-batch
-                annotations send
-                (lambda () (scholia-herdr--dispatch entry payload)))))
-    (funcall persist sent send)))
+         (send (scholia-herdr--send-record entry format scope)))
+    (scholia-db-send-batch
+     annotations send
+     (lambda () (scholia-herdr--dispatch entry payload))
+     persist)))
 
 (defun scholia-herdr--store-buffer (sent send &optional owner)
   "Store this buffer after recording SENT with SEND for OWNER."

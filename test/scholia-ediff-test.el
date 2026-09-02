@@ -5,9 +5,15 @@
 (require 'subr-x)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-locate nil t)
   (require 'scholia-ediff nil t))
+
+(eval-when-compile
+  (require 'ediff))
+
+(declare-function ediff-quit "ediff")
 
 (defun scholia-ediff-test--git (directory &rest arguments)
   "Run git with ARGUMENTS in DIRECTORY and return its output."
@@ -17,7 +23,37 @@
         (error "%s" (buffer-string)))
       (string-trim (buffer-string)))))
 
+(ert-deftest scholia-ediff-integration-lifecycle-is-reversible ()
+  (when (featurep 'scholia-ediff)
+    (unload-feature 'scholia-ediff t))
+  (should (require 'scholia-ediff))
+  (should-not (memq #'scholia-ediff-location scholia-location-functions))
+  (should-not (advice-member-p #'scholia-ediff--capture-revisions
+                               'ediff-vc-internal))
+  (scholia-ediff-setup)
+  (scholia-ediff-setup)
+  (should (= (seq-count (lambda (function)
+                          (eq function #'scholia-ediff-location))
+                        scholia-location-functions)
+             1))
+  (should (advice-member-p #'scholia-ediff--capture-revisions
+                           'ediff-vc-internal))
+  (scholia-ediff-teardown)
+  (should-not (memq #'scholia-ediff-location scholia-location-functions))
+  (should-not (advice-member-p #'scholia-ediff--capture-revisions
+                               'ediff-vc-internal))
+  (scholia-ediff-setup)
+  (unload-feature 'scholia-ediff t)
+  (should-not (memq 'scholia-ediff-location scholia-location-functions))
+  (should-not (advice-member-p 'scholia-ediff--capture-revisions
+                               'ediff-vc-internal))
+  (should (require 'scholia-ediff))
+  (scholia-ediff-setup)
+  (should (memq #'scholia-ediff-location scholia-location-functions))
+  (scholia-ediff-teardown))
+
 (ert-deftest scholia-ediff-resolves-revision-sides-after-startup ()
+  (scholia-ediff-setup)
   (let* ((repository (make-temp-file "scholia-ediff-" t))
          (file (expand-file-name "sample.txt" repository))
          (source nil)
@@ -86,7 +122,8 @@
             (set-buffer-modified-p nil))
           (kill-buffer buffer)))
       (when (file-directory-p repository)
-        (delete-directory repository t)))))
+        (delete-directory repository t))
+      (scholia-ediff-teardown))))
 
 (provide 'scholia-ediff-test)
 ;;; scholia-ediff-test.el ends here

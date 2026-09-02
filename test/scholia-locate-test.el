@@ -5,7 +5,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t)
   (require 'scholia-core nil t))
@@ -20,6 +21,40 @@
       (funcall thunk))
     (nreverse reported)))
 
+(ert-deftest scholia-locate-protocol-api-preserves-wire-shapes ()
+  (let ((location (scholia-locate-make-location "/source.el" 7 2 5 "abc123"))
+        (file-access (scholia-locate-make-file-access "/source.el"))
+        (git-access (scholia-locate-make-git-access "/source.el" "abc123"))
+        (buffer-access (scholia-locate-make-buffer-access
+                        "buffer:one" "*scratch*" 'lisp-interaction-mode))
+        (retrieved '(:text "source" :status excerpt :truncated non-nil
+                           :extension preserved)))
+    (should (equal location
+                   '(:file "/source.el" :line 7 :column 2
+			   :end-column 5 :revision "abc123")))
+    (should (equal (scholia-locate-location-file location) "/source.el"))
+    (should (= (scholia-locate-location-line location) 7))
+    (should (= (scholia-locate-location-column location) 2))
+    (should (= (scholia-locate-location-end-column location) 5))
+    (should (equal (scholia-locate-location-revision location) "abc123"))
+    (should (equal file-access '(:kind file :path "/source.el")))
+    (should (equal git-access
+                   '(:kind git :path "/source.el" :revision "abc123")))
+    (should (equal buffer-access
+                   '(:kind buffer :id "buffer:one" :name "*scratch*"
+			   :mode lisp-interaction-mode)))
+    (should (eq (scholia-locate-access-kind git-access) 'git))
+    (should (equal (scholia-locate-access-path git-access) "/source.el"))
+    (should (equal (scholia-locate-access-revision git-access) "abc123"))
+    (should (equal (scholia-locate-access-id buffer-access) "buffer:one"))
+    (should (equal (scholia-locate-access-name buffer-access) "*scratch*"))
+    (should (eq (scholia-locate-access-mode buffer-access)
+                'lisp-interaction-mode))
+    (should (equal (scholia-locate-retrieved-text retrieved) "source"))
+    (should (eq (scholia-locate-retrieved-status retrieved) 'excerpt))
+    (should (eq (scholia-locate-retrieved-truncated-p retrieved) t))
+    (should (eq (plist-get retrieved :extension) 'preserved))))
+
 (ert-deftest scholia-locate-resolves-specialized-and-file-visiting-positions ()
   (scholia-test-with-temp-file-buffer buffer "alpha beta\n"
     (let* ((file (buffer-file-name buffer))
@@ -27,21 +62,21 @@
                           (when (and (eq buffer (current-buffer))
                                      (= position (point-min)))
                             '(:file "/specialized.txt" :line 7 :column 2
-                              :end-column 5 :revision "abc123")))))
+				    :end-column 5 :revision "abc123")))))
       (cl-progv '(scholia-location-functions) (list (list specialized))
         (load "scholia-locate" nil t)
         (should (equal (run-hook-with-args-until-success
                         'scholia-location-functions (point-min))
                        '(:file "/specialized.txt" :line 7 :column 2
-                         :end-column 5 :revision "abc123")))
+                               :end-column 5 :revision "abc123")))
         (goto-char 7)
         (let ((location (run-hook-with-args-until-success
                          'scholia-location-functions (point))))
-          (should (equal (plist-get location :file) file))
-          (should (equal (plist-get location :line) 1))
-          (should (equal (plist-get location :column) 6))
-          (should (equal (plist-get location :end-column) 10))
-          (should-not (plist-get location :revision)))
+          (should (equal (scholia-locate-location-file location) file))
+          (should (equal (scholia-locate-location-line location) 1))
+          (should (equal (scholia-locate-location-column location) 6))
+          (should (equal (scholia-locate-location-end-column location) 10))
+          (should-not (scholia-locate-location-revision location)))
         (with-temp-buffer
           (insert "unclaimed\n")
           (should-not (run-hook-with-args-until-success
@@ -92,11 +127,11 @@
                   (let ((first-record (scholia-db-record session first-file))
                         (second-record (scholia-db-record session second-file)))
                     (should (equal (sort (mapcar #'scholia-db-annotation-text
-                                                  (scholia-db-record-annotations first-record))
+                                                 (scholia-db-record-annotations first-record))
                                          #'string<)
                                    '("already on alpha" "new for the first file")))
                     (should (equal (sort (mapcar #'scholia-db-annotation-text
-                                                  (scholia-db-record-annotations second-record))
+                                                 (scholia-db-record-annotations second-record))
                                          #'string<)
                                    '("already on beta" "new for the second file")))
                     (should (equal (scholia-db-record-checksum first-record)
@@ -214,11 +249,11 @@
               (let ((annotations (scholia-db-record-annotations
                                   (scholia-db-record session file))))
                 (should-not (member "old" (mapcar #'scholia-db-annotation-id
-                                                   annotations)))
+                                                  annotations)))
                 (should (member "other" (mapcar #'scholia-db-annotation-id
-                                                 annotations)))
+                                                annotations)))
                 (should (member "working" (mapcar #'scholia-db-annotation-id
-                                                   annotations)))
+                                                  annotations)))
                 (should (equal (sort (mapcar #'scholia-db-annotation-text annotations)
                                      #'string<)
                                '("other revision root" "replacement root" "working root")))

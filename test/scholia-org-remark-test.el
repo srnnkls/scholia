@@ -30,12 +30,20 @@
 (require 'subr-x)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-store nil t)
   (require 'scholia-db nil t)
   (require 'scholia-core nil t)
   (require 'scholia-export nil t))
+
+(eval-when-compile
+  (require 'org-remark)
+  (require 'scholia-org-remark))
+
+(declare-function org-remark-highlights-get "org-remark")
+(declare-function scholia-org-remark-export "scholia-org-remark")
 
 (defconst scholia-org-remark-test--source
   "alpha beta\n    gamma delta\nepsilon zeta\n"
@@ -456,7 +464,8 @@ single-session export of the same file carries only its own."
 
 (ert-deftest scholia-org-remark-export-interactive-session-requires-a-listed-name ()
   "An unknown interactive session is rejected before export can render it."
-  (scholia-org-remark-test--with-sources _directory
+  (scholia-org-remark-test--with-sources directory
+    (ignore directory)
     (scholia-test-with-session-directory
       (scholia-org-remark-test--session "known" nil)
       (cl-letf (((symbol-function 'completing-read)
@@ -538,12 +547,12 @@ one `org-remark-source-get-file-name' produces."
                           "id-materialized" "revision note" nil nil "delta")))
         (should (zerop (process-file "git" nil nil nil "-C" directory "init" "-q")))
         (should (zerop (process-file "git" nil nil nil "-C" directory "config"
-                                    "user.email" "test@example.invalid")))
+                                     "user.email" "test@example.invalid")))
         (should (zerop (process-file "git" nil nil nil "-C" directory "config"
-                                    "user.name" "Scholia Test")))
+                                     "user.name" "Scholia Test")))
         (should (zerop (process-file "git" nil nil nil "-C" directory "add" "aaa.txt")))
         (should (zerop (process-file "git" nil nil nil "-C" directory "commit" "-q"
-                                    "-m" "revision fixture")))
+                                     "-m" "revision fixture")))
         (setq revision
               (with-temp-buffer
                 (should (zerop (process-file "git" nil (current-buffer) nil "-C"

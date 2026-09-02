@@ -9,17 +9,15 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        emacs-version: ['29.1', '30.1']
-        experimental: [false]
-        include:
-          - os: ubuntu-latest
-            emacs-version: snapshot
-            experimental: true
+        emacs-version: ['29.1', '30.1', '31.1']
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -36,15 +34,38 @@ jobs:
         run: eask install-deps --dev
 
       - name: Report SQLite availability
-        shell: bash
         run: eask exec emacs -Q --batch --eval "(princ (format \"sqlite-available-p=%S\" (and (fboundp 'sqlite-available-p) (sqlite-available-p))))"
 
-      - name: Compile
-        run: eask compile
+      - name: Compile sources
+        run: eask compile --strict
+
+      - name: Compile tests
+        run: eask run script compile-tests
+
+      - name: Check indentation
+        run: eask run script indent
 
       - name: Test
         run: eask run script test
 
-      - name: Checkdoc
-        # Without --strict, eask exits 0 while printing its warnings.
-        run: eask lint checkdoc --strict
+      - name: Check documentation
+        if: matrix.emacs-version == '31.1'
+        run: eask run script checkdoc
+
+      - name: Lint package
+        if: matrix.emacs-version == '31.1'
+        run: eask run script package
+
+      - name: Clean generated files
+        if: always()
+        run: eask run script clean-generated
+
+      - name: Check clean tree
+        if: always()
+        run: |
+          test -z "$(find . -name '*.elc' -print -quit)"
+          if git ls-files | grep -E '\.elc$|(^|/)(\.eask|build|dist)/'; then
+            exit 1
+          fi
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"

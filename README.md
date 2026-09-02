@@ -11,16 +11,12 @@ git clone https://github.com/srnnkls/scholia.git ~/.emacs.d/site-lisp/scholia
 
 ```emacs-lisp
 (add-to-list 'load-path "~/.emacs.d/site-lisp/scholia")
-(use-package magit-section :ensure t)
-(use-package scholia
-  :ensure nil
-  :demand t
-  :config
-  (require 'scholia-status))
+(require 'scholia)
 ```
 
-Enable `scholia-mode` in a buffer to annotate it. No customization is required. The first
-optional setting is `scholia-session-directory`, which chooses where named sessions live:
+Enable `scholia-mode` in a buffer to annotate immediately into the resolved default session. No
+integration package or customization is required. The first optional setting is
+`scholia-session-directory`, which chooses where named sessions live:
 
 ```emacs-lisp
 (setq scholia-session-directory "~/.emacs.d/scholia/")
@@ -51,8 +47,8 @@ dashboard.
 
 Files and arbitrary live buffers work without an integration module. Each annotation records a
 serializable access descriptor; file, Git revision, and buffer descriptors identify how to reopen
-or describe the source. Magit, Ediff, and git-timemachine supply revision-aware locations when
-their optional resolver modules are loaded.
+or describe the source. Magit, Ediff, and git-timemachine supply revision-aware locations after
+their optional resolver setup functions are enabled.
 
 `scholia-source-snapshot-mode` controls retained source text. The default, `bounded-full`, keeps a
 complete snapshot up to `scholia-source-snapshot-limit`; larger sources fall back to saved line
@@ -62,22 +58,41 @@ exports label every source view with its access description and whether the rend
 
 ## Optional integrations
 
-Load the location resolvers, dashboard, and Org Remark export explicitly:
+Load and enable only the integrations you use:
 
 ```emacs-lisp
-(use-package magit :ensure t)
-(use-package git-timemachine :ensure t)
-(use-package org-remark :ensure t)
-(require 'ediff-vers)
 (require 'scholia-magit)
+(scholia-magit-setup)
+
 (require 'scholia-ediff)
+(scholia-ediff-setup)
+
 (require 'scholia-timemachine)
+(scholia-timemachine-setup)
+
+(require 'scholia-ui)
+(scholia-ui-marginalia-setup)
+```
+
+These setup functions are idempotent. Their matching teardown functions remove Scholia's hooks,
+advice, or Marginalia registration:
+
+```emacs-lisp
+(scholia-magit-teardown)
+(scholia-ediff-teardown)
+(scholia-timemachine-teardown)
+(scholia-ui-marginalia-teardown)
+```
+
+The dashboard and Org Remark exporter are commands from separate modules:
+
+```emacs-lisp
 (require 'scholia-status)
 (require 'scholia-org-remark)
 ```
 
-Magit, Ediff, and git-timemachine are optional revision-aware location resolvers. Generic buffers
-and ordinary files are supported by the built-in source adapters.
+Generic buffers and ordinary files use the built-in source adapters. Magit, Ediff,
+git-timemachine, Marginalia, the dashboard, and Org Remark remain optional.
 
 `scholia-herdr` is source-tree/local-only: both it and its unpublished `herdr` dependency are
 excluded from the package. When both are available locally, load it with `(require 'scholia-herdr)`.

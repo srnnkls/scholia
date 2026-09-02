@@ -16,7 +16,6 @@
 ;;   FILTER    := nil | (FIELD . REGEXP) | (and FILTER...)
 ;;                    | (or FILTER...) | (not FILTER)
 ;;   FIELD     in file, text, annotated-text, session, send
-;;   CANDIDATE := (:file FILE :session SESSION :annotation ANNOTATION)
 ;;
 ;; Every combinator answers for one candidate at a time, so `not' keeps
 ;; the candidates its term rejects rather than emptying the set.
@@ -46,10 +45,10 @@ stored representation, and a field CANDIDATE carries nothing under
 answers no string at all.  A send answers both the destination it went
 to and the label the dashboard shows it under, so a query typed against
 what is on screen narrows as one against the destination does."
-  (let ((annotation (plist-get candidate :annotation)))
+  (let ((annotation (scholia-db-entry-annotation candidate)))
     (pcase field
-      ('file (list (plist-get candidate :file)))
-      ('session (list (plist-get candidate :session)))
+      ('file (list (scholia-db-entry-file candidate)))
+      ('session (list (scholia-db-entry-session candidate)))
       ('text (list (scholia-db-annotation-text annotation)))
       ('annotated-text
        (list (scholia-db-annotation-annotated-text annotation)))

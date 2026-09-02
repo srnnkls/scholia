@@ -15,7 +15,8 @@
 (require 'ert)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t)
   (require 'scholia-filter nil t))

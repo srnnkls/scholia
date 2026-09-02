@@ -19,31 +19,34 @@
 (require 'ert)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t)
   (require 'scholia-store nil t)
   (require 'scholia-session nil t))
 
+(defvar scholia-store-test--read-eval-sentinel)
+
 (defconst scholia-store-test--legacy
   '(:scholia 1
-    :records ((:file "/nowhere/legacy.txt"
-               :annotations ((:id "id-one" :beg 1 :end 6 :text "first note"
-                              :annotated-text "alpha" :line 1 :line-text ""
-                              :column 0 :end-column 0 :color 0
-                              :position :margin :reply-to nil
-                              :sends ((:at "2026-01-01T00:00:00+0000"
-                                       :kind agent :target "codex"
-                                       :label "Codex" :herdr-session nil
-                                       :format rustc :scope buffer)))
-                             (:id "id-two" :beg 1 :end 6 :text "a reply"
-                              :annotated-text "alpha" :line 1 :line-text ""
-                              :column 0 :end-column 0 :color 0
-                              :position :margin :reply-to "id-one"
-                              :sends nil))
-               :checksum "legacy-checksum"))
-    :session (:name "legacy" :created "2026-01-01T00:00:00+0000"
-              :project nil :description nil))
+	     :records ((:file "/nowhere/legacy.txt"
+			      :annotations ((:id "id-one" :beg 1 :end 6 :text "first note"
+						 :annotated-text "alpha" :line 1 :line-text ""
+						 :column 0 :end-column 0 :color 0
+						 :position :margin :reply-to nil
+						 :sends ((:at "2026-01-01T00:00:00+0000"
+							      :kind agent :target "codex"
+							      :label "Codex" :herdr-session nil
+							      :format rustc :scope buffer)))
+					    (:id "id-two" :beg 1 :end 6 :text "a reply"
+						 :annotated-text "alpha" :line 1 :line-text ""
+						 :column 0 :end-column 0 :color 0
+						 :position :margin :reply-to "id-one"
+						 :sends nil))
+			      :checksum "legacy-checksum"))
+	     :session (:name "legacy" :created "2026-01-01T00:00:00+0000"
+			     :project nil :description nil))
   "A session as `scholia-db' printed it before the store moved to SQLite.
 It carries a send and a reply because migration is the one-shot path every
 existing session takes, and a mapping that drops either loses it silently.")
@@ -837,12 +840,12 @@ the migrated session's project and description went without a word."
       (with-temp-file session
         (let ((print-length nil))
           (prin1 '(:scholia 1
-                   :records ((:file "/nowhere/identity.txt"
-                              :annotations nil :checksum "carried"))
-                   :session (:name "work"
-                             :created "2024-01-01T00:00:00+0000"
-                             :project "/nowhere/project"
-                             :description "the notes that matter"))
+			    :records ((:file "/nowhere/identity.txt"
+					     :annotations nil :checksum "carried"))
+			    :session (:name "work"
+					    :created "2024-01-01T00:00:00+0000"
+					    :project "/nowhere/project"
+					    :description "the notes that matter"))
                  (current-buffer))))
       (cl-letf* ((scholia-project-root-function #'ignore)
                  (read (symbol-function 'scholia-store-read-interchange))

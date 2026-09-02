@@ -21,6 +21,9 @@
 (require 'scholia-locate)
 (require 'scholia-session)
 
+(defvar scholia-mode)
+(declare-function scholia-mode "scholia")
+
 (defun scholia-search-annotations ()
   "Return the annotations stored in every session with their context.
 Each entry carries `:session', `:file', `:record' and `:annotation'."
@@ -36,23 +39,21 @@ Each entry carries `:session', `:file', `:record' and `:annotation'."
                          (lambda (file)
                            (let ((record (scholia-store-record store file)))
                              (mapcar (lambda (annotation)
-                                       (list :session session
-                                             :file file
-                                             :record record
-                                             :annotation annotation))
+                                       (scholia-db-make-entry
+                                        session file record annotation))
                                      (scholia-db-record-annotations record))))
                          (scholia-store-files store)))))))
           (scholia-session-list))))
 
 (defun scholia-search-candidate-string (entry)
   "Return the completion candidate string for annotation ENTRY."
-  (let ((annotation (plist-get entry :annotation)))
+  (let ((annotation (scholia-db-entry-annotation entry)))
     (format "%s — %s — %s — %s%s — [%s]"
             (scholia-db-annotation-text annotation)
             (scholia-db-annotation-annotated-text annotation)
-            (plist-get entry :file)
-            (plist-get entry :session)
-            (if-let ((revision (scholia-locate-revision annotation)))
+            (scholia-db-entry-file entry)
+            (scholia-db-entry-session entry)
+            (if-let* ((revision (scholia-locate-revision annotation)))
                 (format " — [%s]" revision)
               "")
             (scholia-db-annotation-id annotation))))
@@ -64,9 +65,9 @@ Each entry carries `:session', `:file', `:record' and `:annotation'."
 (defun scholia-search--jump-annotation (entry)
   "Return the annotation ENTRY should open at.
 Replies follow their `:reply-to' parents in the same record to a position."
-  (let ((annotation (plist-get entry :annotation))
+  (let ((annotation (scholia-db-entry-annotation entry))
         (annotations (scholia-db-record-annotations
-                      (plist-get entry :record)))
+                      (scholia-db-entry-record entry)))
         (seen nil))
     (while (and annotation
                 (not (scholia-db-annotation-beg annotation))
@@ -84,7 +85,7 @@ Replies follow their `:reply-to' parents in the same record to a position."
     (unless annotation
       (user-error "Annotation has no stored position"))
     (setq annotation
-          (scholia-locate-materialize (plist-get entry :file) annotation))
+          (scholia-locate-materialize (scholia-db-entry-file entry) annotation))
     (unless (scholia-db-annotation-beg annotation)
       (user-error "Annotation has no stored position"))
     annotation))
@@ -96,7 +97,7 @@ Replies follow their `:reply-to' parents in the same record to a position."
      (seq-some (lambda (send)
                  (equal destination (scholia-db-send-target send)))
                (scholia-db-annotation-sends
-                (plist-get entry :annotation))))
+                (scholia-db-entry-annotation entry))))
    (scholia-search-annotations)))
 
 (defun scholia-search--send-candidates (entries)
@@ -112,18 +113,18 @@ Replies follow their `:reply-to' parents in the same record to a position."
                         (scholia-db-send-herdr-session send)
                         (scholia-db-send-at send)
                         (scholia-db-annotation-id
-                         (plist-get entry :annotation)))
+                         (scholia-db-entry-annotation entry)))
                 (list entry send)))
              (scholia-db-annotation-sends
-              (plist-get entry :annotation))))
+              (scholia-db-entry-annotation entry))))
           entries)))
 
 (defun scholia-search--jump (entry)
   "Visit ENTRY, activating its owner in a multi-session display."
-  (let* ((session (plist-get entry :session))
+  (let* ((session (scholia-db-entry-session entry))
          (annotation (scholia-search--jump-annotation entry))
-         (file (plist-get entry :file)))
-    (when-let ((buffer (find-buffer-visiting file)))
+         (file (scholia-db-entry-file entry)))
+    (when-let* ((buffer (find-buffer-visiting file)))
       (with-current-buffer buffer
         (when scholia-mode (scholia-save-annotations))))
     (scholia-session-activate session)

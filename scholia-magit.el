@@ -39,15 +39,27 @@
                                       t))
                    (new-revision (magit-commit-oid (caadr sides) t)))
               (when (or (not from) old-revision)
-                (list :file (expand-file-name file)
-                      :line (magit-diff-hunk-line section from)
-                      :column (magit-diff-hunk-column section from)
-                      :end-column (save-excursion
-                                    (end-of-line)
-                                    (magit-diff-hunk-column section from))
-                      :revision (if from old-revision new-revision))))))))))
+                (scholia-locate-make-location
+                 (expand-file-name file)
+                 (magit-diff-hunk-line section from)
+                 (magit-diff-hunk-column section from)
+                 (save-excursion
+                   (end-of-line)
+                   (magit-diff-hunk-column section from))
+                 (if from old-revision new-revision))))))))))
 
-(add-hook 'scholia-location-functions #'scholia-magit-locate-position)
+(defun scholia-magit-setup ()
+  "Enable Scholia source locations in Magit diff buffers."
+  (add-hook 'scholia-location-functions #'scholia-magit-locate-position))
+
+(defun scholia-magit-teardown ()
+  "Disable Scholia source locations in Magit diff buffers."
+  (remove-hook 'scholia-location-functions #'scholia-magit-locate-position))
+
+(defun scholia-magit-unload-function ()
+  "Remove global state installed by `scholia-magit-setup'."
+  (scholia-magit-teardown)
+  nil)
 
 (provide 'scholia-magit)
 ;;; scholia-magit.el ends here

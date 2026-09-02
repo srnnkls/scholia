@@ -15,12 +15,13 @@
 (require 'ert)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t))
 
 (define-error 'scholia-send-test-refused
-  "The sender refused the payload")
+	      "The sender refused the payload")
 
 (defconst scholia-send-test--source
   "alpha one\nbeta two\ngamma three\ndelta four\n"
@@ -213,6 +214,44 @@ reported rather than propagated whatever the user has set."
         (remove-hook 'scholia-send-functions logger)
         (remove-hook 'scholia-send-functions capture)
         (remove-hook 'scholia-send-functions notifier)))))
+
+(ert-deftest scholia-send-batch-persists-before-propagating-observer-quit ()
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer scholia-send-test--source
+      (let* ((file (buffer-file-name buffer))
+             (session (expand-file-name "quit.eld" scholia-session-directory))
+             (annotations (scholia-send-test--annotations))
+             (send (scholia-send-test--send "claude-2"))
+             (observed-counts nil)
+             (quit-propagated nil)
+             (observer
+              (lambda (&rest _)
+                (setq observed-counts
+                      (scholia-send-test--send-counts
+                       (scholia-db-record-annotations
+                        (scholia-db-record session file))))
+                (signal 'quit nil))))
+        (unwind-protect
+            (progn
+              (add-hook 'scholia-send-functions observer)
+              (condition-case nil
+                  (scholia-db-send-batch
+                   annotations send #'ignore
+                   (lambda (sent _record)
+                     (scholia-db-save session file sent "checksum-one")))
+                (quit (setq quit-propagated t)))
+              (should quit-propagated)
+              (should (equal observed-counts '(2 2 2 2)))
+              (let ((loaded (scholia-db-record-annotations
+                             (scholia-db-record session file))))
+                (should (equal (scholia-send-test--send-counts loaded)
+                               '(2 2 2 2)))
+                (should (equal (scholia-send-test--targets loaded)
+                               '("earlier-alpha" "claude-2"
+                                 "earlier-beta" "claude-2"
+                                 "earlier-gamma" "claude-2"
+                                 "earlier-delta" "claude-2")))))
+          (remove-hook 'scholia-send-functions observer))))))
 
 
 ;;;; Persistence

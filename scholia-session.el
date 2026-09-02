@@ -23,6 +23,8 @@
 (require 'scholia-db)
 (require 'scholia-core)
 
+(declare-function scholia-mode "scholia")
+
 (define-error 'scholia-session-error "Scholia session error" 'scholia-error)
 
 (defcustom scholia-session-switch-hook nil

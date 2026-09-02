@@ -16,7 +16,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t)
   (require 'scholia-store nil t))
@@ -167,7 +168,7 @@ COUNT defaults to the first occurrence."
       (should-error (scholia-db-files session) :type 'scholia-db-format-error)
       (with-temp-file session
         (prin1 '(:session (:name "untagged" :created nil :project nil :description nil)
-                 :records nil)
+			  :records nil)
                (current-buffer)))
       (should-error (scholia-db-files session) :type 'scholia-db-format-error)
       (with-temp-file session
@@ -489,20 +490,49 @@ for that session forever, and that one is listed."
       (let* ((file (buffer-file-name buffer))
              (session (scholia-db-test--session-file "mutation"))
              (bounds (scholia-db-test--bounds "gamma"))
-             (gamma (scholia-db-test--annotation "id-gamma" "on gamma" bounds))
-             (reply (scholia-db-test--reply "id-reply" "a reply" "id-gamma")))
+             (access '(:kind git :path "/source.txt" :revision "abc123"))
+             (gamma (append (scholia-db-test--annotation
+                             "id-gamma" "on gamma" bounds)
+                            (list :source-id "source:gamma"
+                                  :access access
+                                  :snapshot scholia-db-test--source
+                                  :snapshot-status 'full
+                                  :snapshot-truncated nil
+                                  :extension "preserved")))
+             (reply (scholia-db-test--reply "id-reply" "a reply" "id-gamma"))
+             (record (scholia-db-make-record file (list gamma) "checksum-entry"))
+             (entry (scholia-db-make-entry "mutation" file record gamma)))
+        (should (equal entry
+                       (list :session "mutation" :file file
+                             :record record :annotation gamma)))
+        (should (equal (scholia-db-entry-session entry) "mutation"))
+        (should (equal (scholia-db-entry-file entry) file))
+        (should (eq (scholia-db-entry-record entry) record))
+        (should (eq (scholia-db-entry-annotation entry) gamma))
         (should (equal (scholia-db-annotation-id gamma) "id-gamma"))
         (should (equal (scholia-db-annotation-beg gamma) (car bounds)))
         (should (equal (scholia-db-annotation-end gamma) (cdr bounds)))
         (should (equal (scholia-db-annotation-text gamma) "on gamma"))
         (should (equal (scholia-db-annotation-annotated-text gamma) "gamma"))
+        (should (equal (scholia-db-annotation-source-id gamma) "source:gamma"))
+        (should (equal (scholia-db-annotation-access gamma) access))
+        (should (equal (scholia-db-annotation-snapshot gamma)
+                       scholia-db-test--source))
+        (should (eq (scholia-db-annotation-snapshot-status gamma) 'full))
+        (should-not (scholia-db-annotation-snapshot-truncated-p gamma))
+        (setq gamma
+              (scholia-db-annotation-set-access
+               gamma '(:kind file :path "/fallback.txt")))
+        (should (equal (scholia-db-annotation-access gamma)
+                       '(:kind file :path "/fallback.txt")))
+        (should (equal (plist-get gamma :extension) "preserved"))
         (should-not (scholia-db-annotation-reply-p gamma))
         (should (scholia-db-annotation-reply-p reply))
         (should (equal (scholia-db-annotation-reply-to reply) "id-gamma"))
         (let* ((shuffled (list :sends nil :reply-to nil :position :margin :color 0
-                              :end-column nil :column nil :line-text nil :line nil
-                              :annotated-text "gamma" :text "on gamma"
-                              :end (cdr bounds) :beg (car bounds) :id "id-shuffled"))
+                               :end-column nil :column nil :line-text nil :line nil
+                               :annotated-text "gamma" :text "on gamma"
+                               :end (cdr bounds) :beg (car bounds) :id "id-shuffled"))
                (renamed (scholia-db-annotation-set-text shuffled "only the text")))
           (should (equal (scholia-db-annotation-id shuffled) "id-shuffled"))
           (should (equal (scholia-db-annotation-beg shuffled) (car bounds)))
@@ -525,7 +555,15 @@ for that session forever, and that one is listed."
           (let ((loaded (car (scholia-db-test--annotations session file))))
             (should (equal (scholia-db-annotation-id loaded) "id-gamma"))
             (should (equal (scholia-db-annotation-text loaded) "revised note"))
-            (should (equal (scholia-db-annotation-beg loaded) 4))))))))
+            (should (equal (scholia-db-annotation-beg loaded) 4))
+            (should (equal (scholia-db-annotation-source-id loaded) "source:gamma"))
+            (should (equal (scholia-db-annotation-access loaded)
+                           '(:kind file :path "/fallback.txt")))
+            (should (equal (scholia-db-annotation-snapshot loaded)
+                           scholia-db-test--source))
+            (should (eq (scholia-db-annotation-snapshot-status loaded) 'full))
+            (should-not (scholia-db-annotation-snapshot-truncated-p loaded))
+            (should (equal (plist-get loaded :extension) "preserved"))))))))
 
 
 ;;;; The checksum-drift re-search

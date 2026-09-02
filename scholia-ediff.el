@@ -71,12 +71,12 @@
           (buffer (current-buffer))
           (location (save-excursion
                       (goto-char position)
-                      (list :file scholia-ediff--file
-                            :line (line-number-at-pos position t)
-                            :column (- position (line-beginning-position))
-                            :end-column (- (line-end-position)
-                                           (line-beginning-position))
-                            :revision scholia-ediff--revision))))
+                      (scholia-locate-make-location
+                       scholia-ediff--file
+                       (line-number-at-pos position t)
+                       (- position (line-beginning-position))
+                       (- (line-end-position) (line-beginning-position))
+                       scholia-ediff--revision))))
       (when (buffer-live-p control)
         (with-current-buffer control
           (when (and (not ediff-merge-job)
@@ -84,8 +84,23 @@
                          (eq buffer ediff-buffer-B)))
             location))))))
 
-(advice-add 'ediff-vc-internal :around #'scholia-ediff--capture-revisions)
-(add-hook 'scholia-location-functions #'scholia-ediff-location)
+(defun scholia-ediff-setup ()
+  "Enable Scholia source locations in Ediff revision buffers.
+Advice is required because Ediff exposes no hook carrying both revisions."
+  (unless (advice-member-p #'scholia-ediff--capture-revisions
+                           'ediff-vc-internal)
+    (advice-add 'ediff-vc-internal :around #'scholia-ediff--capture-revisions))
+  (add-hook 'scholia-location-functions #'scholia-ediff-location))
+
+(defun scholia-ediff-teardown ()
+  "Disable Scholia source locations in Ediff revision buffers."
+  (advice-remove 'ediff-vc-internal #'scholia-ediff--capture-revisions)
+  (remove-hook 'scholia-location-functions #'scholia-ediff-location))
+
+(defun scholia-ediff-unload-function ()
+  "Remove global state installed by `scholia-ediff-setup'."
+  (scholia-ediff-teardown)
+  nil)
 
 (provide 'scholia-ediff)
 ;;; scholia-ediff.el ends here

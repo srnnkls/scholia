@@ -15,6 +15,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
+(defvar scholia-test-file-spec)
+
 (defun scholia-harness-test--read-forms (path)
   "Return the list of top-level forms read from PATH."
   (with-temp-buffer

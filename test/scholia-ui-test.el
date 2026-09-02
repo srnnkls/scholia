@@ -11,7 +11,11 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-when-compile
+  (defvar marginalia-annotators))
+
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-overlay nil t)
   (require 'scholia-db nil t)
@@ -131,8 +135,8 @@
         (should (= (length candidates) 2))
         (should (= (length (delete-dups (copy-sequence candidates))) 2))
         (should (seq-every-p (lambda (candidate)
-                                (member candidate '("reused note" "one-only note" "two-only note")))
-                              candidates))))))
+                               (member candidate '("reused note" "one-only note" "two-only note")))
+                             candidates))))))
 
 (ert-deftest scholia-ui-reuses-completion-and-accepts-new-free-text ()
   "Both a selected candidate and an unmatched string use the normal lifecycle."
@@ -160,10 +164,12 @@
                              #'string<)
                        '("brand new note" "reused note")))))))
 
-(ert-deftest scholia-ui-registers-its-marginalia-annotator-only-when-loaded ()
-  "Marginalia shows history metadata without becoming a core dependency."
+(ert-deftest scholia-ui-registers-its-marginalia-annotator-explicitly ()
+  "Marginalia registration is explicit, idempotent, and reversible."
   (let ((without (generate-new-buffer " *scholia-ui-no-marginalia*"))
-        (root (expand-file-name scholia-test-project-root)))
+        (root (expand-file-name scholia-test-project-root))
+        (entry '(scholia-annotation scholia-ui-marginalia-annotator
+                                    builtin none)))
     (unwind-protect
         (progn
           (should (zerop
@@ -179,35 +185,45 @@
           (with-current-buffer without
             (goto-char (point-min))
             (should (equal (read (current-buffer)) '(nil nil nil))))
-          (cl-progv '(marginalia-annotators) '(nil)
-            (provide 'marginalia)
-            (when (featurep 'scholia-ui)
-              (unload-feature 'scholia-ui t))
-            (unwind-protect
-                (scholia-ui-test--with-state
-                  (let ((first (scholia-ui-test--source "first.txt" "first words\n"))
-                        (last (scholia-ui-test--source "last 2.txt" "last words\n")))
-                    (scholia-ui-test--seed
-                     "alpha" first
-                     (list (scholia-ui-test--annotation "a" "recurring note" 1 6 "first")))
-                    (scholia-ui-test--seed
-                     "beta" last
-                     (list (scholia-ui-test--annotation "b" "recurring note" 1 5 "last")))
-                    (scholia-ui-test--require)
-                    (let* ((entry (assq 'scholia-annotation marginalia-annotators))
-                           (annotator (nth 1 entry)))
-                      (should entry)
-                      (should (equal (cddr entry) '(builtin none)))
-                      (should (functionp annotator))
-                      (let* ((output (funcall annotator "recurring note"))
-                             (count-output
-                              (replace-regexp-in-string (regexp-quote last) "" output t t)))
-                        (should
-                         (string-match-p
-                          "\\(?:\\`\\|[^[:digit:]]\\)2\\(?:\\'\\|[^[:digit:]]\\)"
-                          count-output))
-                        (should (string-match-p (regexp-quote last) output))))))
-              (setq features (delq 'marginalia features)))))
+          (scholia-ui-test--require)
+          (scholia-ui-marginalia-setup)
+          (scholia-ui-marginalia-setup)
+          (should (= (seq-count (lambda (candidate) (equal candidate entry))
+                                marginalia-annotators)
+                     1))
+          (scholia-ui-test--with-state
+            (let ((first (scholia-ui-test--source "first.txt" "first words\n"))
+                  (last (scholia-ui-test--source "last 2.txt" "last words\n")))
+              (scholia-ui-test--seed
+               "alpha" first
+               (list (scholia-ui-test--annotation
+                      "a" "recurring note" 1 6 "first")))
+              (scholia-ui-test--seed
+               "beta" last
+               (list (scholia-ui-test--annotation
+                      "b" "recurring note" 1 5 "last")))
+              (let* ((annotator (nth 1 (car (member entry marginalia-annotators))))
+                     (output (funcall annotator "recurring note"))
+                     (count-output
+                      (replace-regexp-in-string
+                       (regexp-quote last) "" output t t)))
+                (should (functionp annotator))
+                (should
+                 (string-match-p
+                  "\\(?:\\`\\|[^[:digit:]]\\)2\\(?:\\'\\|[^[:digit:]]\\)"
+                  count-output))
+                (should (string-match-p (regexp-quote last) output)))))
+          (scholia-ui-marginalia-teardown)
+          (should-not (member entry marginalia-annotators))
+          (scholia-ui-marginalia-setup)
+          (unload-feature 'scholia-ui t)
+          (should-not (member entry marginalia-annotators))
+          (should (require 'scholia-ui))
+          (should-not (member entry marginalia-annotators))
+          (scholia-ui-marginalia-setup)
+          (should (member entry marginalia-annotators)))
+      (when (fboundp 'scholia-ui-marginalia-teardown)
+        (scholia-ui-marginalia-teardown))
       (kill-buffer without))))
 
 (provide 'scholia-ui-test)

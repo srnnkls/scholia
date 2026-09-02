@@ -19,6 +19,7 @@
  (depends-on "git-timemachine")
  (depends-on "magit")
  (depends-on "magit-section")
+ (depends-on "marginalia")
  (depends-on "org-remark"))
 
 (load-paths "./test")
@@ -27,7 +28,11 @@
 ;; obtain it and `scholia-herdr.el' fails at its `require' before a test stub
 ;; can load.  Its gate therefore runs locally only.  Publishing herdr.el
 ;; reverses this: add a `depends-on' for it and drop the exclusion.
-(files "scholia*.el" '(:exclude "scholia-herdr.el"))
+(defconst scholia-source-file-spec
+  '("scholia*.el" (:exclude "scholia-herdr.el"))
+  "File spec for the shipped package sources.")
+
+(apply #'files scholia-source-file-spec)
 
 (defconst scholia-test-file-spec
   '("test/scholia*.el" (:exclude "test/scholia-herdr-test.el"))
@@ -45,6 +50,46 @@
                      (cons "eask test ert"
                            (mapcar #'shell-quote-argument files))
                      " ")))
+
+(defun scholia-eask-command (command files)
+  "Return COMMAND followed by shell-quoted FILES."
+  (mapconcat #'identity
+             (cons command (mapcar #'shell-quote-argument files))
+             " "))
+
+(script "compile-tests"
+        (scholia-eask-command
+         "eask compile --strict"
+         (eask-expand-file-specs scholia-test-file-spec)))
+
+(script "indent"
+        (scholia-eask-command
+         "eask lint indent --strict"
+         (append (eask-expand-file-specs scholia-source-file-spec)
+                 (eask-expand-file-specs scholia-test-file-spec))))
+
+(script "checkdoc"
+        (scholia-eask-command
+         "eask lint checkdoc --strict"
+         (eask-expand-file-specs scholia-source-file-spec)))
+
+(script "package"
+        (scholia-eask-command
+         "eask lint package --strict"
+         (eask-expand-file-specs scholia-source-file-spec)))
+
+(script "clean-generated"
+        (concat
+         "eask clean all && emacs -Q --batch --eval "
+         (shell-quote-argument
+          (prin1-to-string
+           '(dolist (directory (list default-directory "test"))
+              (dolist (file (directory-files directory t "\\.elc\\'"))
+                (delete-file file)))))))
+
+(add-hook 'eask-before-lint/indent-hook
+          (lambda ()
+            (mapc #'load (eask-expand-file-specs scholia-test-file-spec))))
 
 (add-hook 'eask-before-compile-hook
           (lambda ()

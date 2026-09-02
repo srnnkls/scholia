@@ -2,11 +2,41 @@
 
 (require 'ert)
 (require 'magit-diff)
+(require 'seq)
 
 (load "scholia-locate" nil t)
 
+(eval-when-compile
+  (require 'scholia-magit))
+
+(declare-function scholia-magit-locate-position "scholia-magit")
+(declare-function scholia-magit-setup "scholia-magit")
+(declare-function scholia-magit-teardown "scholia-magit")
+
+(ert-deftest scholia-magit-integration-lifecycle-is-reversible ()
+  (when (featurep 'scholia-magit)
+    (unload-feature 'scholia-magit t))
+  (should (require 'scholia-magit))
+  (should-not (memq #'scholia-magit-locate-position scholia-location-functions))
+  (scholia-magit-setup)
+  (scholia-magit-setup)
+  (should (= (seq-count (lambda (function)
+                          (eq function #'scholia-magit-locate-position))
+                        scholia-location-functions)
+             1))
+  (scholia-magit-teardown)
+  (should-not (memq #'scholia-magit-locate-position scholia-location-functions))
+  (scholia-magit-setup)
+  (unload-feature 'scholia-magit t)
+  (should-not (memq 'scholia-magit-locate-position scholia-location-functions))
+  (should (require 'scholia-magit))
+  (scholia-magit-setup)
+  (should (memq #'scholia-magit-locate-position scholia-location-functions))
+  (scholia-magit-teardown))
+
 (ert-deftest scholia-magit-resolves-real-diff-positions ()
   (should (require 'scholia-magit nil t))
+  (scholia-magit-setup)
   (let* ((repo (make-temp-file "scholia-magit-" t))
          (old-file (expand-file-name "old-name.txt" repo))
          (new-file (expand-file-name "renamed-name.txt" repo))
@@ -98,7 +128,8 @@
       (when (buffer-live-p second-diff)
         (kill-buffer second-diff))
       (when (file-directory-p repo)
-        (delete-directory repo t)))))
+        (delete-directory repo t))
+      (scholia-magit-teardown))))
 
 (provide 'scholia-magit-test)
 ;;; scholia-magit-test.el ends here

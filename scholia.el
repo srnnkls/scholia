@@ -24,8 +24,10 @@
 
 (require 'scholia-vars)
 
-;;;###autoload
-(autoload 'scholia-mode "scholia-vars" nil t)
+(declare-function scholia-initialize "scholia-core")
+(declare-function scholia-shutdown "scholia-core")
+(declare-function scholia-session-name "scholia-core")
+
 ;;;###autoload
 (autoload 'scholia-save-annotations "scholia-core" nil t)
 ;;;###autoload
@@ -66,8 +68,31 @@
 (autoload 'scholia-search "scholia-search" nil t)
 ;;;###autoload
 (autoload 'scholia-search-sends "scholia-search" nil t)
+
+(defvar scholia-mode-map
+  (let ((map (make-sparse-keymap)))
+    (keymap-set map "C-c C-a" #'scholia-annotate)
+    (keymap-set map "C-c C-d" #'scholia-delete-annotation)
+    (keymap-set map "C-c C-r" #'scholia-reply-to)
+    (keymap-set map "C-c C-e" #'scholia-export)
+    (keymap-set map "C-c C-f" #'scholia-search)
+    (keymap-set map "C-c C-n" #'scholia-goto-next-annotation)
+    (keymap-set map "C-c C-p" #'scholia-goto-previous-annotation)
+    map)
+  "Keymap of command `scholia-mode'.")
+
 ;;;###autoload
-(autoload 'scholia-org-remark-export "scholia-org-remark" nil t)
+(define-minor-mode scholia-mode
+  "Toggle Scholia mode.
+Annotations are shown alongside the buffer text and stored in a session
+database, leaving the file itself unchanged.
+
+\\{scholia-mode-map}"
+  :lighter (:eval (format " Sch:%s" (scholia-session-name)))
+  (require 'scholia-core)
+  (if scholia-mode
+      (scholia-initialize)
+    (scholia-shutdown scholia-autosave)))
 
 (provide 'scholia)
 ;;; scholia.el ends here

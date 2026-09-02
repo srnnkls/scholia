@@ -5,12 +5,23 @@
 (require 'git-timemachine)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-db nil t)
   (require 'scholia-core nil t)
   (load "scholia-locate" nil t)
   (require 'scholia-magit nil t))
+
+(eval-when-compile
+  (when (bound-and-true-p byte-compile-current-file)
+    (require 'scholia-timemachine)))
+
+(declare-function scholia-timemachine-locate-position "scholia-timemachine")
+(declare-function scholia-timemachine--redraw "scholia-timemachine")
+(declare-function scholia-timemachine--select-buffer "scholia-timemachine")
+(declare-function scholia-timemachine-setup "scholia-timemachine")
+(declare-function scholia-timemachine-teardown "scholia-timemachine")
 
 (defun scholia-timemachine-test--git (repository &rest arguments)
   "Run git ARGUMENTS in REPOSITORY and return its standard output."
@@ -19,8 +30,51 @@
       (error "git %s failed: %s" (string-join arguments " ") (buffer-string)))
     (string-trim (buffer-string))))
 
+(ert-deftest scholia-timemachine-integration-lifecycle-is-reversible ()
+  (when (featurep 'scholia-timemachine)
+    (unload-feature 'scholia-timemachine t))
+  (should (require 'scholia-timemachine))
+  (should-not (memq #'scholia-timemachine-locate-position
+                    scholia-location-functions))
+  (should-not (advice-member-p #'scholia-timemachine--select-buffer
+                               'git-timemachine--start))
+  (should-not (advice-member-p #'scholia-timemachine--redraw
+                               'git-timemachine-show-revision))
+  (scholia-timemachine-setup)
+  (scholia-timemachine-setup)
+  (should (= (seq-count (lambda (function)
+                          (eq function #'scholia-timemachine-locate-position))
+                        scholia-location-functions)
+             1))
+  (should (advice-member-p #'scholia-timemachine--select-buffer
+                           'git-timemachine--start))
+  (should (advice-member-p #'scholia-timemachine--redraw
+                           'git-timemachine-show-revision))
+  (scholia-timemachine-teardown)
+  (should-not (memq #'scholia-timemachine-locate-position
+                    scholia-location-functions))
+  (should-not (advice-member-p #'scholia-timemachine--select-buffer
+                               'git-timemachine--start))
+  (should-not (advice-member-p #'scholia-timemachine--redraw
+                               'git-timemachine-show-revision))
+  (scholia-timemachine-setup)
+  (unload-feature 'scholia-timemachine t)
+  (should-not (memq 'scholia-timemachine-locate-position
+                    scholia-location-functions))
+  (should-not (advice-member-p 'scholia-timemachine--select-buffer
+                               'git-timemachine--start))
+  (should-not (advice-member-p 'scholia-timemachine--redraw
+                               'git-timemachine-show-revision))
+  (should (require 'scholia-timemachine))
+  (scholia-timemachine-setup)
+  (should (memq #'scholia-timemachine-locate-position
+                scholia-location-functions))
+  (scholia-timemachine-teardown))
+
 (ert-deftest scholia-timemachine-round-trips-renamed-revision-annotations ()
   (should (require 'scholia-timemachine nil t))
+  (scholia-magit-setup)
+  (scholia-timemachine-setup)
   (when (featurep 'scholia-timemachine)
     (scholia-test-with-session-directory
       (let* ((repository (make-temp-file "scholia-timemachine-" t))
@@ -111,7 +165,7 @@
                 (should (equal (mapcar (lambda (chain)
                                          (overlay-get (car chain) 'scholia-annotation))
                                        (scholia-buffer-chains))
-                               '("from timemachine at the second revision"))))
+                               '("from timemachine at the second revision")))))
           (when (buffer-live-p diff-buffer)
             (kill-buffer diff-buffer))
           (when (buffer-live-p timemachine-buffer)
@@ -119,7 +173,9 @@
               (set-buffer-modified-p nil))
             (kill-buffer timemachine-buffer))
           (when (file-directory-p repository)
-            (delete-directory repository t))))))))
+            (delete-directory repository t))
+          (scholia-timemachine-teardown)
+          (scholia-magit-teardown))))))
 
 (provide 'scholia-timemachine-test)
 ;;; scholia-timemachine-test.el ends here

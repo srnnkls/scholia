@@ -17,7 +17,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-core nil t))
 
@@ -701,7 +702,7 @@ Emacs whose ERT sets the variable."
                          (should-not (scholia-buffer-chains))
                          (scholia-mode 1)
                          (should (equal (mapcar #'scholia-core-test--chain-text
-                                               (scholia-buffer-chains))
+						(scholia-buffer-chains))
                                         '("memory note")))
                          (scholia-mode -1)))
                      (let ((output (scholia-export-session "default" nil 'integrate)))

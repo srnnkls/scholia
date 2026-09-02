@@ -92,7 +92,7 @@ reached whatever the buffer is narrowed to."
               (when (< (point) stop)
                 (push (cons (point) stop) segments))
               (goto-char (if (< eol end) (1+ eol) end))))))
-    (nreverse segments))))
+      (nreverse segments))))
 
 (defun scholia-overlay--owner-offset (owner)
   "Return OWNER's configured colour offset in this buffer."
@@ -111,7 +111,7 @@ overlays, INDEX its stored colour index, and OWNER its session."
          (text-face
           (nth (mod display-index (length scholia-annotation-text-faces))
                scholia-annotation-text-faces))
-        (final (car (last segments))))
+         (final (car (last segments))))
     (mapcar (lambda (segment)
               (let ((overlay (make-overlay (car segment) (cdr segment) nil t)))
                 (overlay-put overlay 'scholia-annotation text)

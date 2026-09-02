@@ -19,7 +19,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
   (require 'scholia-overlay nil t)
   (require 'scholia-db nil t)
@@ -415,8 +416,8 @@ every save and every load, since `scholia-session-file' resolves each time."
                                  '("on the project buffer")))
                   (should (equal (scholia-session-test--texts
                                   (scholia-session-test--stored "gamma" file))
-                                 '("on the project buffer"))))))
-        (delete-directory root t))))))
+                                 '("on the project buffer")))))))
+        (delete-directory root t)))))
 
 
 ;;;; Renaming
@@ -820,8 +821,8 @@ comes back holding the deleted session's annotations verbatim."
         (scholia-mode 1)
         (let ((chains (scholia-buffer-chains)))
           (should (equal (sort (mapcar (lambda (chain)
-                                        (overlay-get (car chain) 'scholia-annotation))
-                                      chains)
+                                         (overlay-get (car chain) 'scholia-annotation))
+                                       chains)
                                #'string<)
                          '("alpha note" "beta note")))
           (should (equal (mapcar #'scholia-chain-color-index chains) '(0 0)))
@@ -940,7 +941,7 @@ comes back holding the deleted session's annotations verbatim."
                   (should (member "jumped" scholia-active-sessions))
                   (should (equal (scholia-session-test--chain-texts)
                                  '("jump note"))))
-                (when-let ((jump-buffer (find-buffer-visiting jump-file)))
+                (when-let* ((jump-buffer (find-buffer-visiting jump-file)))
                   (with-current-buffer jump-buffer (set-buffer-modified-p nil))
                   (kill-buffer jump-buffer)))))
         (delete-directory root t)))))

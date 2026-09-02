@@ -4,7 +4,8 @@
 (require 'ert)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars)
   (require 'scholia-db)
   (require 'scholia-core)

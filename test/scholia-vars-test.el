@@ -17,7 +17,8 @@
 (require 'seq)
 (require 'scholia-test-helper)
 
-(let ((load-prefer-newer t))
+(eval-and-compile
+  (setq load-prefer-newer t)
   (require 'scholia-vars nil t))
 
 (defun scholia-vars-test--emacs ()
@@ -67,11 +68,25 @@ streams in the report."
                             (assq key custom-face-attributes)))))
 
 
-;;;; Structure: the leaf stands alone, the entry point holds nothing
+;;;; Structure: the leaf stands alone, the entry point owns the mode
+
+(defconst scholia-vars-test--leaf-mode-probe
+  '(progn
+     (require 'scholia-vars)
+     (prin1 (list :mode (fboundp 'scholia-mode)
+                  :map (boundp 'scholia-mode-map)
+                  :registered (and (assq 'scholia-mode minor-mode-map-alist) t))))
+  "Form reporting whether the definitions leaf registers the mode.")
+
+(ert-deftest scholia-vars-leaf-does-not-register-the-mode ()
+  (should (equal (scholia-vars-test--probe
+                  scholia-vars-test--leaf-mode-probe
+                  "-L" (expand-file-name scholia-test-project-root))
+                 '(:mode nil :map nil :registered nil))))
 
 (defconst scholia-vars-test--keymap-probe
   '(progn
-     (require 'scholia-vars)
+     (require 'scholia)
      (let* ((entry (assq 'scholia-mode minor-mode-map-alist))
             (registered (cdr entry)))
        (prin1 (list :entry (and entry t)
@@ -82,26 +97,24 @@ streams in the report."
                     :bindings (and (keymapp registered)
                                    (mapcar (lambda (key)
                                              (cons key (keymap-lookup registered key)))
-                                           '("C-c C-a" "C-c C-d" "C-c C-r" "C-c C-s"
+                                           '("C-c C-a" "C-c C-d" "C-c C-r"
                                              "C-c C-e" "C-c C-f" "C-c C-n" "C-c C-p")))))))
-  "Form reporting the keymap `scholia-mode' registers.
-Reported for a probe loading the leaf on its own.")
+  "Form reporting the keymap registered by the package entry point.")
 
-(ert-deftest scholia-vars-mode-registers-the-keymap-when-the-leaf-loads-alone ()
+(ert-deftest scholia-vars-entry-point-registers-the-mode-keymap ()
   (should (equal (scholia-vars-test--probe
                   scholia-vars-test--keymap-probe
                   "-L" (expand-file-name scholia-test-project-root))
                  '(:entry t
-                   :registered-keymap t
-                   :registered-is-mode-map t
-                   :bindings (("C-c C-a" . scholia-annotate)
-                              ("C-c C-d" . scholia-delete-annotation)
-                              ("C-c C-r" . scholia-reply-to)
-                              ("C-c C-s" . scholia-status)
-                              ("C-c C-e" . scholia-export)
-                              ("C-c C-f" . scholia-search)
-                              ("C-c C-n" . scholia-goto-next-annotation)
-                              ("C-c C-p" . scholia-goto-previous-annotation))))))
+			  :registered-keymap t
+			  :registered-is-mode-map t
+			  :bindings (("C-c C-a" . scholia-annotate)
+				     ("C-c C-d" . scholia-delete-annotation)
+				     ("C-c C-r" . scholia-reply-to)
+				     ("C-c C-e" . scholia-export)
+				     ("C-c C-f" . scholia-search)
+				     ("C-c C-n" . scholia-goto-next-annotation)
+				     ("C-c C-p" . scholia-goto-previous-annotation))))))
 
 (ert-deftest scholia-vars-byte-compiles-standalone-with-warnings-as-errors ()
   (let ((source (scholia-test-project-file "scholia-vars.el")))
@@ -142,8 +155,7 @@ Reported for a probe loading the leaf on its own.")
     scholia-export
     scholia-export-session
     scholia-search
-    scholia-search-sends
-    scholia-org-remark-export)
+    scholia-search-sends)
   "Commands the package entry point must publish as autoloads.")
 
 (defun scholia-vars-test--entry-point-probe ()
@@ -197,7 +209,7 @@ Reported for a probe loading the leaf on its own.")
                                            (symbol-file symbol 'defun)
                                          (find-lisp-object-file-name symbol 'defvar)))))
                       '(scholia-mode scholia-mode-map
-                        scholia-export-format scholia-session)))))))
+				     scholia-export-format scholia-session)))))))
 
 (defun scholia-vars-test--autoload-probe (generated)
   "Return a form reporting which commands GENERATED can autoload.
@@ -226,26 +238,28 @@ cookies can make a command autoloadable."
                          (nth 1 (symbol-function 'scholia-search-sends)))
                     :without-loading-scholia (not (featurep 'scholia)))))))
 
-(ert-deftest scholia-vars-entry-point-requires-the-leaf-and-holds-no-state ()
+(ert-deftest scholia-vars-entry-point-requires-the-leaf-and-owns-the-mode ()
   (should (equal (scholia-vars-test--probe
                   (scholia-vars-test--entry-point-probe)
                   "-L" (expand-file-name scholia-test-project-root))
                  '(:features ("scholia" "scholia-vars")
-                   :entry-point-requires ("scholia-vars")
-                   :bound-by-the-entry-point ()
-                   :unpublished-commands nil
-                   :defined-in ((scholia-mode . "scholia-vars")
-                                (scholia-mode-map . "scholia-vars")
-                                (scholia-export-format . "scholia-vars")
-                                (scholia-session . "scholia-vars")))))
+			     :entry-point-requires ("scholia-vars")
+			     :bound-by-the-entry-point ("scholia-mode"
+							"scholia-mode-hook"
+							"scholia-mode-map")
+			     :unpublished-commands nil
+			     :defined-in ((scholia-mode . "scholia")
+					  (scholia-mode-map . "scholia")
+					  (scholia-export-format . "scholia-vars")
+					  (scholia-session . "scholia-vars")))))
   (let ((dir (file-name-as-directory (make-temp-file "scholia-autoloads-" t))))
     (unwind-protect
         (should (equal (scholia-vars-test--probe
                         (scholia-vars-test--autoload-probe
                          (expand-file-name "scholia-autoloads.el" dir)))
                        '(:autoloaded nil
-                         :search-sends-autoload-file "scholia-search"
-                         :without-loading-scholia t)))
+				     :search-sends-autoload-file "scholia-search"
+				     :without-loading-scholia t)))
       (delete-directory dir t))))
 
 

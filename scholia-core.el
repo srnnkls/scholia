@@ -25,6 +25,8 @@
 
 (declare-function scholia-ui-read-annotation "scholia-ui")
 
+(defvar scholia-mode)
+
 
 ;;;; What a buffer annotates, and into which session
 
@@ -224,7 +226,7 @@ however often it is stored and whatever the edits in between."
       (put (overlay-get (car chain) 'scholia--chain-id)
            'scholia-core--id
            (scholia-db-annotation-id annotation))
-      (when-let ((revision (scholia-db-annotation-revision annotation)))
+      (when-let* ((revision (scholia-db-annotation-revision annotation)))
         (overlay-put (car chain) 'scholia-core--revision revision)
         (overlay-put (car chain) 'after-string
                      (concat (overlay-get (car chain) 'after-string)
@@ -241,15 +243,15 @@ however often it is stored and whatever the edits in between."
          (unresolved nil)
          (replies (seq-filter #'scholia-db-annotation-reply-p annotations))
          (current (scholia-locate-source 'capture (point-min)))
-         (current-source (plist-get current :source-id)))
+         (current-source (scholia-locate-location-source-id current)))
     (dolist (annotation
              (seq-remove #'scholia-db-annotation-reply-p annotations))
       (let ((location (scholia-locate-source
                        'capture (scholia-db-annotation-beg annotation))))
-        (if-let ((source (plist-get location :source-id)))
+        (if-let* ((source (scholia-locate-location-source-id location)))
             (let ((fields (copy-sequence location)))
               (when (and (scholia-db-annotation-revision annotation)
-                         (not (plist-get fields :revision)))
+                         (not (scholia-locate-location-revision location)))
                 (cl-remf fields :revision))
               (cl-remf fields :file)
               (setq annotation
@@ -275,7 +277,8 @@ however often it is stored and whatever the edits in between."
          (buffer-name))
       (unless groups
         (when current-source
-          (push (list (list current-source (plist-get current :revision)))
+          (push (list (list current-source
+                            (scholia-locate-location-revision current)))
                 groups)))
       (dolist (reply replies)
         (let ((group
@@ -480,8 +483,8 @@ naming the session itself still gets the signal from
   (unless (scholia-buffer-chains)
     (setq scholia--session-state nil)
     (let* ((location (scholia-locate-source 'capture (point-min)))
-           (source (plist-get location :source-id))
-           (revision (plist-get location :revision))
+           (source (scholia-locate-location-source-id location))
+           (revision (scholia-locate-location-revision location))
            (checksum (scholia-buffer-checksum)))
       (when source
         (dolist (session (scholia-effective-sessions))
@@ -599,14 +602,14 @@ prefix selects another effective session."
 (defun scholia-delete-annotation ()
   "Delete the selected annotation at point."
   (interactive)
-  (if-let ((chain (scholia-core--select-chain)))
+  (if-let* ((chain (scholia-core--select-chain)))
       (mapc #'delete-overlay chain)
     (scholia-core--report "No annotation at point")))
 
 (defun scholia-reply-to (&optional text)
   "Store a reply with TEXT under the selected annotation at point."
   (interactive)
-  (if-let ((chain (scholia-core--select-chain)))
+  (if-let* ((chain (scholia-core--select-chain)))
       (let ((owner (scholia-chain-owner chain)))
         (scholia-core--store
          (append (scholia-core--buffer-annotations owner)

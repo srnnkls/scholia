@@ -109,7 +109,7 @@
 (defun scholia-org-remark--write (output file)
   "Write OUTPUT to FILE without changing its visiting buffer."
   (write-region output nil file nil 'silent)
-  (when-let ((buffer (find-buffer-visiting file)))
+  (when-let* ((buffer (find-buffer-visiting file)))
     (with-current-buffer buffer
       (unless (buffer-modified-p)
         (revert-buffer t t)))))

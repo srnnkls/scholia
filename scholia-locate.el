@@ -29,18 +29,102 @@ Each function receives an operation, an access plist and an annotation.")
 (defvar-local scholia-locate--buffer-id nil
   "Opaque identity used to retrieve this buffer as a source.")
 
+(defun scholia-locate-location-file (location)
+  "Return the file or source identity carried by LOCATION."
+  (plist-get location :file))
+
+(defun scholia-locate-location-line (location)
+  "Return the one-based source line carried by LOCATION."
+  (plist-get location :line))
+
+(defun scholia-locate-location-column (location)
+  "Return the starting column carried by LOCATION."
+  (plist-get location :column))
+
+(defun scholia-locate-location-end-column (location)
+  "Return the ending column carried by LOCATION."
+  (plist-get location :end-column))
+
+(defun scholia-locate-location-revision (location)
+  "Return the revision carried by LOCATION, or nil."
+  (plist-get location :revision))
+
+(defun scholia-locate-location-source-id (location)
+  "Return the normalized source identity carried by LOCATION."
+  (plist-get location :source-id))
+
+(defun scholia-locate-location-access (location)
+  "Return the source access descriptor carried by LOCATION."
+  (plist-get location :access))
+
+(defun scholia-locate-make-location (file line column end-column &optional revision)
+  "Return a location in FILE from LINE and COLUMN to END-COLUMN at REVISION."
+  (list :file file
+        :line line
+        :column column
+        :end-column end-column
+        :revision revision))
+
+(defun scholia-locate-make-file-access (file)
+  "Return a source access descriptor for FILE."
+  (list :kind 'file :path file))
+
+(defun scholia-locate-make-git-access (file revision)
+  "Return a source access descriptor for FILE at REVISION."
+  (list :kind 'git :path file :revision revision))
+
+(defun scholia-locate-make-buffer-access (id name mode)
+  "Return a source access descriptor for buffer ID named NAME using MODE."
+  (list :kind 'buffer :id id :name name :mode mode))
+
+(defun scholia-locate-access-kind (access)
+  "Return the source kind carried by ACCESS."
+  (plist-get access :kind))
+
+(defun scholia-locate-access-path (access)
+  "Return the file path carried by ACCESS."
+  (plist-get access :path))
+
+(defun scholia-locate-access-revision (access)
+  "Return the Git revision carried by ACCESS."
+  (plist-get access :revision))
+
+(defun scholia-locate-access-id (access)
+  "Return the opaque buffer identity carried by ACCESS."
+  (plist-get access :id))
+
+(defun scholia-locate-access-name (access)
+  "Return the display name carried by ACCESS."
+  (plist-get access :name))
+
+(defun scholia-locate-access-mode (access)
+  "Return the major mode carried by ACCESS."
+  (plist-get access :mode))
+
+(defun scholia-locate-retrieved-text (retrieved)
+  "Return the source text carried by RETRIEVED."
+  (plist-get retrieved :text))
+
+(defun scholia-locate-retrieved-status (retrieved)
+  "Return the provenance status carried by RETRIEVED."
+  (plist-get retrieved :status))
+
+(defun scholia-locate-retrieved-truncated-p (retrieved)
+  "Return non-nil when RETRIEVED is a truncated source fallback."
+  (and (plist-get retrieved :truncated) t))
+
 (defun scholia-locate-file-position (position)
   "Return the source location at POSITION in a file-visiting buffer."
   (unless scholia-locate--terminally-unresolved
-    (when-let ((file (buffer-file-name (or (buffer-base-buffer)
-                                           (current-buffer)))))
+    (when-let* ((file (buffer-file-name (or (buffer-base-buffer)
+                                            (current-buffer)))))
       (save-excursion
         (goto-char position)
-        (list :file (expand-file-name file)
-              :line (line-number-at-pos position t)
-              :column (- position (line-beginning-position))
-              :end-column (- (line-end-position) (line-beginning-position))
-              :revision nil)))))
+        (scholia-locate-make-location
+         (expand-file-name file)
+         (line-number-at-pos position t)
+         (- position (line-beginning-position))
+         (- (line-end-position) (line-beginning-position)))))))
 
 (add-hook 'scholia-location-functions #'scholia-locate-file-position t)
 
@@ -62,19 +146,17 @@ Each function receives an operation, an access plist and an annotation.")
           :column (- position (line-beginning-position))
           :end-column (- (line-end-position) (line-beginning-position))
           :revision nil
-          :access (list :kind 'buffer
-                        :id scholia-locate--buffer-id
-                        :name (buffer-name)
-                        :mode major-mode))))
+          :access (scholia-locate-make-buffer-access
+                   scholia-locate--buffer-id (buffer-name) major-mode))))
 
 (defun scholia-locate--access (location)
   "Return the serializable access descriptor for LOCATION."
-  (or (plist-get location :access)
-      (let ((file (plist-get location :file))
-            (revision (plist-get location :revision)))
+  (or (scholia-locate-location-access location)
+      (let ((file (scholia-locate-location-file location))
+            (revision (scholia-locate-location-revision location)))
         (if revision
-            (list :kind 'git :path file :revision revision)
-          (list :kind 'file :path file)))))
+            (scholia-locate-make-git-access file revision)
+          (scholia-locate-make-file-access file)))))
 
 (defun scholia-locate-position (position)
   "Capture the source location at buffer POSITION."
@@ -85,8 +167,8 @@ Each function receives an operation, an access plist and an annotation.")
          (access (and location (scholia-locate--access location))))
     (when location
       (scholia-db--with-fields
-       location :source-id (or (plist-get location :source-id)
-                               (plist-get location :file))
+       location :source-id (or (scholia-locate-location-source-id location)
+                               (scholia-locate-location-file location))
        :access access))))
 
 (defun scholia-locate--annotation (annotations)
@@ -106,17 +188,17 @@ Each function receives an operation, an access plist and an annotation.")
   (let* ((access (scholia-locate--access location))
          (retrieved (run-hook-with-args-until-success
                      'scholia-source-functions 'retrieve access nil))
-         (text (plist-get retrieved :text)))
+         (text (scholia-locate-retrieved-text retrieved)))
     (when text
       (if (and (eq scholia-source-snapshot-mode 'bounded-full)
                (<= (string-bytes text) scholia-source-snapshot-limit))
           (list :access access
-                :source-id (plist-get location :source-id)
+                :source-id (scholia-locate-location-source-id location)
                 :snapshot text
                 :snapshot-status 'full
                 :snapshot-truncated nil)
         (list :access access
-              :source-id (plist-get location :source-id)
+              :source-id (scholia-locate-location-source-id location)
               :snapshot nil
               :snapshot-status 'excerpt
               :snapshot-truncated
@@ -127,11 +209,11 @@ Each function receives an operation, an access plist and an annotation.")
   (when-let* ((access (scholia-locate--access location))
               (retrieved (run-hook-with-args-until-success
                           'scholia-source-functions 'retrieve access nil))
-              (text (plist-get retrieved :text)))
+              (text (scholia-locate-retrieved-text retrieved)))
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
-      (when (zerop (forward-line (1- (plist-get location :line))))
+      (when (zerop (forward-line (1- (scholia-locate-location-line location))))
         (let ((bol (line-beginning-position)))
           (list :line-text
                 (buffer-substring-no-properties bol (line-end-position))))))))
@@ -161,8 +243,8 @@ Each function receives an operation, an access plist and an annotation.")
 
 (defun scholia-locate--file-source (operation access _annotation)
   "Apply OPERATION to file ACCESS, or return nil when it is not a file."
-  (when (eq (plist-get access :kind) 'file)
-    (let ((file (plist-get access :path)))
+  (when (eq (scholia-locate-access-kind access) 'file)
+    (let ((file (scholia-locate-access-path access)))
       (pcase operation
         ('retrieve
          (condition-case nil
@@ -175,12 +257,12 @@ Each function receives an operation, an access plist and an annotation.")
 
 (defun scholia-locate--git-source (operation access _annotation)
   "Apply OPERATION to Git ACCESS, or return nil when it is not Git source."
-  (when (eq (plist-get access :kind) 'git)
-    (let ((file (plist-get access :path))
-          (revision (plist-get access :revision)))
+  (when (eq (scholia-locate-access-kind access) 'git)
+    (let ((file (scholia-locate-access-path access))
+          (revision (scholia-locate-access-revision access)))
       (pcase operation
         ('retrieve
-         (when-let ((buffer (scholia-locate--revision-buffer file revision)))
+         (when-let* ((buffer (scholia-locate--revision-buffer file revision)))
            (unwind-protect
                (with-current-buffer buffer
                  (list :text (buffer-string) :status 'live))
@@ -190,8 +272,8 @@ Each function receives an operation, an access plist and an annotation.")
 
 (defun scholia-locate--buffer-source (operation access _annotation)
   "Apply OPERATION to buffer ACCESS, or return nil for another source kind."
-  (when (eq (plist-get access :kind) 'buffer)
-    (let ((buffer (scholia-locate--buffer (plist-get access :id))))
+  (when (eq (scholia-locate-access-kind access) 'buffer)
+    (let ((buffer (scholia-locate--buffer (scholia-locate-access-id access))))
       (pcase operation
         ('retrieve
          (when buffer
@@ -204,9 +286,9 @@ Each function receives an operation, an access plist and an annotation.")
         ('open buffer)
         ('describe
          (format "%s (%s; buffer %s)"
-                 (plist-get access :name)
-                 (plist-get access :mode)
-                 (plist-get access :id)))))))
+                 (scholia-locate-access-name access)
+                 (scholia-locate-access-mode access)
+                 (scholia-locate-access-id access)))))))
 
 (add-hook 'scholia-source-functions #'scholia-locate--file-source t)
 (add-hook 'scholia-source-functions #'scholia-locate--git-source t)
@@ -227,20 +309,28 @@ then to saved line excerpts."
                    'scholia-source-functions operation subject annotation)))
        (if (or live (not (eq operation 'retrieve)))
            live
-         (if-let ((snapshot (seq-some (lambda (candidate)
-                                        (plist-get candidate :snapshot))
-                                      (scholia-locate--annotations annotations))))
+         (if-let* ((snapshot (seq-some #'scholia-db-annotation-snapshot
+                                       (scholia-locate--annotations annotations))))
              (list :text snapshot :status 'full
-                   :truncated (plist-get annotation :snapshot-truncated))
+                   :truncated
+                   (scholia-db-annotation-snapshot-truncated-p annotation))
            (list :text (scholia-locate--excerpt annotations)
                  :status 'excerpt
                  :truncated
-                 (plist-get annotation :snapshot-truncated))))))))
+                 (scholia-db-annotation-snapshot-truncated-p annotation))))))))
 
 (defun scholia-locate-revision (annotation)
   "Return the revision stored for ANNOTATION."
-  (or (plist-get annotation :revision)
-      (plist-get (plist-get annotation :access) :revision)))
+  (or (scholia-db-annotation-revision annotation)
+      (scholia-locate-access-revision
+       (scholia-db-annotation-access annotation))))
+
+(defun scholia-locate-annotation-access (annotation file)
+  "Return ANNOTATION's access descriptor, falling back through FILE."
+  (or (scholia-db-annotation-access annotation)
+      (if-let* ((revision (scholia-locate-revision annotation)))
+          (scholia-locate-make-git-access file revision)
+        (scholia-locate-make-file-access file))))
 
 (defun scholia-locate--revision-buffer (file revision)
   "Return a buffer holding FILE at REVISION, or nil."
@@ -287,7 +377,7 @@ When REMATERIALIZE is non-nil, replace stored bounds against this source."
   (let ((retrieved (scholia-locate-source 'retrieve access annotations)))
     (when retrieved
       (with-temp-buffer
-        (insert (plist-get retrieved :text))
+        (insert (scholia-locate-retrieved-text retrieved))
         (funcall function)))))
 
 (defun scholia-locate-materialize (file annotation)
@@ -295,11 +385,7 @@ When REMATERIALIZE is non-nil, replace stored bounds against this source."
   (if (or (scholia-db-annotation-reply-p annotation)
           (scholia-db-annotation-beg annotation))
       annotation
-    (let ((access (or (plist-get annotation :access)
-                      (if-let ((revision
-                                (scholia-locate-revision annotation)))
-                          (list :kind 'git :path file :revision revision)
-                        (list :kind 'file :path file)))))
+    (let ((access (scholia-locate-annotation-access annotation file)))
       (or (condition-case nil
               (scholia-locate--in-source
                access annotation
@@ -309,26 +395,24 @@ When REMATERIALIZE is non-nil, replace stored bounds against this source."
 
 (defun scholia-locate-open (file annotation)
   "Open FILE at ANNOTATION's stored source location."
-  (let* ((access (or (plist-get annotation :access)
-                     (if-let ((revision
-                               (scholia-locate-revision annotation)))
-                         (list :kind 'git :path file :revision revision)
-                       (list :kind 'file :path file))))
+  (let* ((access (scholia-locate-annotation-access annotation file))
          (buffer (scholia-locate-source 'open access annotation))
          (retrieved nil)
          (fallback nil))
     (unless buffer
       (setq retrieved (scholia-locate-source 'retrieve access annotation))
       (when retrieved
-        (setq fallback (not (eq (plist-get retrieved :status) 'live))
+        (setq fallback (not (eq (scholia-locate-retrieved-status retrieved) 'live))
               buffer
               (generate-new-buffer
-               (format "*scholia %s*" (or (plist-get access :name) file))))
+               (format "*scholia %s*"
+                       (or (scholia-locate-access-name access) file))))
         (with-current-buffer buffer
-          (when (eq (plist-get access :kind) 'buffer)
-            (setq-local scholia-locate--buffer-id (plist-get access :id)))
-          (insert (plist-get retrieved :text))
-          (when-let ((mode (plist-get access :mode)))
+          (when (eq (scholia-locate-access-kind access) 'buffer)
+            (setq-local scholia-locate--buffer-id
+                        (scholia-locate-access-id access)))
+          (insert (scholia-locate-retrieved-text retrieved))
+          (when-let* ((mode (scholia-locate-access-mode access)))
             (when (fboundp mode) (delay-mode-hooks (funcall mode))))
           (set-buffer-modified-p nil))))
     (unless buffer

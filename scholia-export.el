@@ -428,7 +428,7 @@ An unregistered FORMAT signals `scholia-export-unknown-format'."
           (mapcar #'scholia-db--snapshot
                   (scholia-core--buffer-annotations session)))
          (location (scholia-locate-source 'capture (point-min)))
-         (source (plist-get location :source-id)))
+         (source (scholia-locate-location-source-id location)))
     (append annotations
             (and source
                  (seq-filter
@@ -459,14 +459,14 @@ An unregistered FORMAT signals `scholia-export-unknown-format'."
 (defun scholia-export--source-groups (record)
   "Return RECORD's relocated and snapshot threads for the current buffer."
   (let* ((unplaced nil)
-        (placed (scholia-db-buffer-annotations
-                 record
-                 (scholia-buffer-checksum)
-                 (lambda (entries) (setq unplaced entries))))
-        (threads (scholia-export--threads
-                  (scholia-db-record-annotations record)))
-        (live nil)
-        (stale nil))
+         (placed (scholia-db-buffer-annotations
+                  record
+                  (scholia-buffer-checksum)
+                  (lambda (entries) (setq unplaced entries))))
+         (threads (scholia-export--threads
+                   (scholia-db-record-annotations record)))
+         (live nil)
+         (stale nil))
     (dolist (thread (car threads))
       (let ((root (scholia-export--root thread)))
         (if (seq-find
@@ -552,25 +552,23 @@ An unregistered FORMAT signals `scholia-export-unknown-format'."
   "Render ANNOTATIONS from RECORD through their source access.
 FORMAT and FALLBACK select the presentation."
   (let* ((root (car annotations))
-         (access (or (plist-get root :access)
-                     (if-let ((revision (scholia-locate-revision root)))
-                         (list :kind 'git :path fallback :revision revision)
-                       (list :kind 'file :path fallback))))
-         (annotations (if (plist-get root :access)
+         (stored-access (scholia-db-annotation-access root))
+         (access (scholia-locate-annotation-access root fallback))
+         (annotations (if stored-access
                           annotations
-                        (cons (scholia-db--with-fields root :access access)
+                        (cons (scholia-db-annotation-set-access root access)
                               (cdr annotations))))
          (retrieved (scholia-locate-source 'retrieve access annotations))
-         (text (plist-get retrieved :text))
-         (status (plist-get retrieved :status))
-         (truncated (plist-get retrieved :truncated))
+         (text (scholia-locate-retrieved-text retrieved))
+         (status (scholia-locate-retrieved-status retrieved))
+         (truncated (scholia-locate-retrieved-truncated-p retrieved))
          (name (or (scholia-locate-source 'describe access root) fallback)))
     (with-temp-buffer
       (insert text)
-      (let ((buffer-file-name (plist-get access :path))
+      (let ((buffer-file-name (scholia-locate-access-path access))
             (view (scholia-db-make-record
                    fallback annotations (scholia-db-record-checksum record))))
-        (if-let ((mode (plist-get access :mode)))
+        (if-let* ((mode (scholia-locate-access-mode access)))
             (when (fboundp mode) (delay-mode-hooks (funcall mode)))
           (when buffer-file-name (delay-mode-hooks (set-auto-mode))))
         (pcase-let ((`(,live . ,stale)
@@ -589,16 +587,15 @@ FORMAT and FALLBACK select the presentation."
                               (scholia-export-render live format name))))
                 (stale-output
                  (and stale
-                      (let* ((snapshot (seq-some (lambda (annotation)
-                                                   (plist-get annotation :snapshot))
+                      (let* ((snapshot (seq-some #'scholia-db-annotation-snapshot
                                                  stale))
                              (source (or snapshot
                                          (scholia-export--snapshot-source stale)))
                              (provenance (if snapshot 'full 'excerpt)))
                         (with-temp-buffer
                           (insert source)
-                          (let ((buffer-file-name (plist-get access :path)))
-                            (if-let ((mode (plist-get access :mode)))
+                          (let ((buffer-file-name (scholia-locate-access-path access)))
+                            (if-let* ((mode (scholia-locate-access-mode access)))
                                 (when (fboundp mode)
                                   (delay-mode-hooks (funcall mode)))
                               (when buffer-file-name
@@ -661,11 +658,12 @@ FORMAT and FALLBACK select the presentation."
 (defun scholia-export--buffer-access ()
   "Return the current buffer source's compact live access preamble."
   (let* ((location (scholia-locate-source 'capture (point-min)))
-         (access (plist-get location :access))
+         (access (scholia-locate-location-access location))
          (description (scholia-locate-source 'describe access))
          (retrieved (scholia-locate-source 'retrieve access)))
     (format "Access: %s [%s]"
-            description (or (plist-get retrieved :status) 'excerpt))))
+            description
+            (or (scholia-locate-retrieved-status retrieved) 'excerpt))))
 
 (defun scholia-export--buffer-sessions (sessions format headers)
   "Render buffer SESSIONS as FORMAT, adding HEADERS when non-nil."

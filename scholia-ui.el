@@ -18,12 +18,20 @@
 (require 'seq)
 (require 'scholia-search)
 
+(eval-when-compile
+  (defvar marginalia-annotators))
+
+(defconst scholia-ui--marginalia-entry
+  '(scholia-annotation scholia-ui-marginalia-annotator builtin none)
+  "Marginalia registry entry for Scholia annotation completion.")
+
 (defun scholia-ui--annotation-entries (text)
   "Return stored annotation entries whose text equals TEXT."
   (seq-filter
    (lambda (entry)
      (equal text
-            (scholia-db-annotation-text (plist-get entry :annotation))))
+            (scholia-db-annotation-text
+             (scholia-db-entry-annotation entry))))
    (scholia-search-annotations)))
 
 (defun scholia-ui--annotation-candidates ()
@@ -31,7 +39,8 @@
   (seq-take
    (delete-dups
     (mapcar (lambda (entry)
-              (scholia-db-annotation-text (plist-get entry :annotation)))
+              (scholia-db-annotation-text
+               (scholia-db-entry-annotation entry)))
             (scholia-search-annotations)))
    scholia-annotation-history-limit))
 
@@ -50,14 +59,23 @@
   "Return prior-use metadata for annotation CANDIDATE."
   (let* ((entries (scholia-ui--annotation-entries candidate))
          (last-entry (car (last entries))))
-    (format " %d %s" (length entries) (plist-get last-entry :file))))
+    (format " %d %s" (length entries) (scholia-db-entry-file last-entry))))
 
-(with-eval-after-load 'marginalia
-  (let ((entry '(scholia-annotation scholia-ui-marginalia-annotator
-                                      builtin none))
-        (registry (intern "marginalia-annotators")))
-    (set registry
-         (cons entry (delete entry (symbol-value registry))))))
+(defun scholia-ui-marginalia-setup ()
+  "Register Scholia annotation completion with Marginalia."
+  (require 'marginalia)
+  (add-to-list 'marginalia-annotators scholia-ui--marginalia-entry))
+
+(defun scholia-ui-marginalia-teardown ()
+  "Remove Scholia annotation completion from Marginalia."
+  (when (boundp 'marginalia-annotators)
+    (setq marginalia-annotators
+          (delete scholia-ui--marginalia-entry marginalia-annotators))))
+
+(defun scholia-ui-unload-function ()
+  "Remove global state installed by `scholia-ui-marginalia-setup'."
+  (scholia-ui-marginalia-teardown)
+  nil)
 
 (provide 'scholia-ui)
 ;;; scholia-ui.el ends here
