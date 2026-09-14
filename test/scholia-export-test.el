@@ -790,7 +790,7 @@ sorted globally reads f1 f2 f3 f4."
 (ert-deftest scholia-multisession-export-selects-visible-owners-and-subdues-replies ()
   (scholia-test-with-session-directory
     (scholia-test-with-temp-file-buffer buffer scholia-export-test--source
-      (let* ((globals '(scholia-session scholia-active-sessions scholia-autosave))
+      (let* ((globals '(scholia-session scholia-visible-sessions scholia-autosave))
              (snapshot (mapcar (lambda (symbol)
                                  (list symbol
                                        (boundp symbol)
@@ -809,7 +809,7 @@ sorted globally reads f1 f2 f3 f4."
         (unwind-protect
             (progn
               (set-default 'scholia-session "alpha")
-              (set-default 'scholia-active-sessions '("beta"))
+              (set-default 'scholia-visible-sessions '("beta"))
               (set-default 'scholia-autosave nil)
               (scholia-db-save (scholia-session-file "alpha") file
                                (list alpha) checksum)
@@ -847,37 +847,21 @@ sorted globally reads f1 f2 f3 f4."
                   (should (string-match-p "Session: beta" selected))
                   (should (string-match-p "beta visible" selected))
                   (should-not (string-match-p "alpha visible" selected))))
-              (let ((scholia-annotation-text-faces
-                     '((:foreground "red" :weight bold)
-                       (:foreground "green" :weight bold)
-                       (:foreground "blue" :weight bold))))
-                (cl-labels
-                    ((attribute (face name)
-                       (cond
-                        ((and (listp face) (plist-member face name))
-                         (plist-get face name))
-                        ((symbolp face)
-                         (face-attribute face name nil 'default))
-                        ((listp face)
-                         (seq-some (lambda (part)
-                                     (let ((value (attribute part name)))
-                                       (unless (memq value '(nil unspecified)) value)))
-                                   face)))))
-                  (with-temp-buffer
-                    (scholia-thread-render (list beta reply))
+              (let ((color (scholia-color-for-index 2)))
+                (with-temp-buffer
+                  (scholia-thread-render (list beta reply) color)
+                  (goto-char (point-min))
+                  (should (search-forward "beta visible" nil t))
+                  (let ((root-face (button-get
+                                    (button-at (match-beginning 0)) 'face)))
                     (goto-char (point-min))
-                    (should (search-forward "beta visible" nil t))
-                    (let ((root-face (button-get
-                                      (button-at (match-beginning 0)) 'face)))
-                      (goto-char (point-min))
-                      (should (search-forward "beta reply" nil t))
-                      (let ((reply-face (button-get
-                                         (button-at (match-beginning 0)) 'face)))
-                        (should (equal (attribute root-face :foreground) "blue"))
-                        (should (equal (attribute reply-face :foreground) "blue"))
-                        (should (eq (attribute root-face :weight) 'bold))
-                        (should-not (eq (attribute reply-face :weight) 'bold))
-                        (should-not (equal root-face reply-face))))))))
+                    (should (search-forward "beta reply" nil t))
+                    (let ((reply-face (button-get
+                                       (button-at (match-beginning 0)) 'face)))
+                      (should (equal (plist-get root-face :background) color))
+                      (should (equal (plist-get reply-face :background)
+                                     (scholia-color-tint color 1)))
+                      (should-not (equal root-face reply-face)))))))
           (when (get-buffer scholia-export-buffer-name)
             (kill-buffer scholia-export-buffer-name))
           (dolist (entry snapshot)

@@ -33,6 +33,8 @@
 ;;;###autoload
 (autoload 'scholia-annotate "scholia-core" nil t)
 ;;;###autoload
+(autoload 'scholia-edit-annotation "scholia-core" nil t)
+;;;###autoload
 (autoload 'scholia-delete-annotation "scholia-core" nil t)
 ;;;###autoload
 (autoload 'scholia-reply-to "scholia-core" nil t)
@@ -45,9 +47,11 @@
 ;;;###autoload
 (autoload 'scholia-session-switch "scholia-session" nil t)
 ;;;###autoload
-(autoload 'scholia-session-activate "scholia-session" nil t)
+(autoload 'scholia-session-show "scholia-session" nil t)
 ;;;###autoload
-(autoload 'scholia-session-deactivate "scholia-session" nil t)
+(autoload 'scholia-session-hide "scholia-session" nil t)
+;;;###autoload
+(autoload 'scholia-session-toggle "scholia-session" nil t)
 ;;;###autoload
 (autoload 'scholia-session-rename "scholia-session" nil t)
 ;;;###autoload
@@ -72,6 +76,7 @@
 (defvar scholia-mode-map
   (let ((map (make-sparse-keymap)))
     (keymap-set map "C-c C-a" #'scholia-annotate)
+    (keymap-set map "C-c C-c" #'scholia-edit-annotation)
     (keymap-set map "C-c C-d" #'scholia-delete-annotation)
     (keymap-set map "C-c C-r" #'scholia-reply-to)
     (keymap-set map "C-c C-e" #'scholia-export)

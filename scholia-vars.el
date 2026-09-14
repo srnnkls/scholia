@@ -41,8 +41,11 @@ global default when no project matches."
                  (string :tag "Session name"))
   :local t)
 
-(defcustom scholia-active-sessions nil
-  "Session names shown in addition to a buffer's annotation target."
+(defcustom scholia-visible-sessions nil
+  "Sessions drawn in a buffer besides the one it annotates into.
+Visibility and target are separate: this list says what is drawn,
+`scholia-session' says where a new annotation goes.  The target is drawn
+whether or not it is listed here."
   :type '(repeat string))
 
 (defcustom scholia-project-sessions nil
@@ -76,18 +79,29 @@ Its value decides which entry of `scholia-project-sessions' applies."
 
 (defcustom scholia-session-state-file
   (locate-user-emacs-file "scholia/project-sessions.eld")
-  "File the assignments made with `scholia-session-assign-project' persist in.
-Point this at your setup's durable state directory when
-`locate-user-emacs-file' lands in a cache that is wiped.  Assignments
-written in configuration through `scholia-project-sessions' need no
-file, and answer before the stored ones."
+  "File the state that outlives Emacs is kept in.
+Holds the assignments made with `scholia-session-assign-project', and the
+sessions shown when `scholia-persist-visibility' says so.  Point this at
+your setup's durable state directory when `locate-user-emacs-file' lands
+in a cache that is wiped.  Assignments written in configuration through
+`scholia-project-sessions' need no file, and answer before the stored
+ones."
   :type 'file)
 
-(defvar scholia--assignment-cache nil
-  "Cons of the state file last read and the assignments it held.")
+(defcustom scholia-persist-visibility nil
+  "Whether the sessions being shown outlive Emacs.
+Nil makes visibility a matter of the sitting: a restart draws the target
+alone and `scholia-session-show' is how the rest come back.  Non-nil
+keeps the shown sessions and the global target in
+`scholia-session-state-file' and reads them back the first time an
+annotated buffer is drawn."
+  :type 'boolean)
+
+(defvar scholia--state-cache nil
+  "Cons of the state file last read and the state it held.")
 
 (defun scholia--read-state-file ()
-  "Return the assignments in `scholia-session-state-file', or nil for none."
+  "Return the state stored in `scholia-session-state-file', or nil for none."
   (when (and scholia-session-state-file
              (file-readable-p scholia-session-state-file))
     (with-temp-buffer
@@ -97,15 +111,28 @@ file, and answer before the stored ones."
             (and (listp stored) stored))
         (error nil)))))
 
-(defun scholia-stored-assignments ()
-  "Return the assignments saved in `scholia-session-state-file'.
+(defun scholia--state-normalize (stored)
+  "Return STORED as a state plist, whatever shape it was written in.
+A file holding a bare alist is one written before scholia kept anything
+besides the project assignments in it, and answers as those assignments."
+  (if (or (null stored) (keywordp (car stored)))
+      stored
+    (list :assignments stored)))
+
+(defun scholia-stored-state ()
+  "Return the state plist saved in `scholia-session-state-file'.
 The file is read again whenever `scholia-session-state-file' names
 another one, and the writer hands its result over as it stores it, so
 resolving a session name costs no read."
-  (unless (equal (car scholia--assignment-cache) scholia-session-state-file)
-    (setq scholia--assignment-cache
-          (cons scholia-session-state-file (scholia--read-state-file))))
-  (cdr scholia--assignment-cache))
+  (unless (equal (car scholia--state-cache) scholia-session-state-file)
+    (setq scholia--state-cache
+          (cons scholia-session-state-file
+                (scholia--state-normalize (scholia--read-state-file)))))
+  (cdr scholia--state-cache))
+
+(defun scholia-stored-assignments ()
+  "Return the project assignments saved in `scholia-session-state-file'."
+  (plist-get (scholia-stored-state) :assignments))
 
 (defcustom scholia-autosave t
   "Whether scholia stores the annotations before it lets go of a buffer.
@@ -140,28 +167,34 @@ Nil falls back to `scholia-export-format'."
 
 ;;;; Appearance and behaviour
 
+(defcustom scholia-annotation-editor 'minibuffer
+  "Global input interface for `scholia-annotate' and `scholia-edit-annotation'.
+`inline' opens a temporary field below the current document line, with
+optional Corfu completion.  `minibuffer' uses `completing-read'."
+  :type '(choice (const :tag "Minibuffer" minibuffer)
+                 (const :tag "Inline field with optional Corfu" inline)))
+
 (defcustom scholia-annotation-history-limit 200
   "How many past annotations are offered as recurring candidates."
   :type 'natnum)
 
-(defcustom scholia-highlight-faces '((:underline "#EEF192")
-                                     (:underline "#92EEF1")
-                                     (:underline "#F192EE"))
-  "Face attribute plists cycled over annotated text."
-  :type '(repeat plist))
+(defcustom scholia-session-colors '("#EEF192" "#92EEF1" "#F192EE"
+                                    "#B6F192" "#F1B692" "#9296F1")
+  "Colours sessions are drawn in, taken in order, one session each.
+Every annotation of a session wears its colour, whichever of them it is.
+A buffer showing more sessions than there are colours here turns the hue
+wheel on for the rest rather than giving two sessions one colour."
+  :type '(repeat color))
 
-(defcustom scholia-annotation-text-faces
-  '((:background "#EEF192" :foreground "black")
-    (:background "#92EEF1" :foreground "black")
-    (:background "#F192EE" :foreground "black"))
-  "Face attribute plists cycled over annotation text.
-Each entry pairs with the entry of `scholia-highlight-faces' at the same
-position."
-  :type '(repeat plist))
+(defcustom scholia-reply-tint-step 0.35
+  "How much of its saturation a reply loses against the note it answers.
+Applied once per level of depth, so a reply to a reply fades twice."
+  :type 'float)
 
-(defcustom scholia-session-color-cycle '(0 1 2)
-  "Offsets used to distinguish active sessions' annotation colours."
-  :type '(repeat integer))
+(defcustom scholia-render-reply-indent 2
+  "Columns a reply is set in past the note it answers."
+  :type 'natnum)
+
 
 (defcustom scholia-source-snapshot-mode 'bounded-full
   "Policy used to retain source text for later access.
@@ -210,8 +243,13 @@ Applies when a file changed while `scholia-mode' was off."
   "Alist of per-session rendering and preservation state.")
 
 (defvar-local scholia--colors-index-counter 0
-  "Always increasing index into the annotation face lists.
-Addresses `scholia-highlight-faces' and `scholia-annotation-text-faces'.")
+  "Always increasing index stored with each annotation this buffer makes.
+Kept for the record an annotation round-trips through; a session's colour
+is what draws it.")
+
+(defvar-local scholia--replies nil
+  "Alist mapping a chain id to the reply lines drawn under its note.
+Each entry is a list of conses of depth and text, in thread order.")
 
 (defvar-local scholia--unplaced-annotations nil
   "Stored annotations this buffer could not be shown holding.
@@ -223,6 +261,19 @@ the record as they are rather than writing a record without them.")
 
 
 ;;;; Annotations
+
+(defvar scholia-session-color-index-function #'ignore
+  "Function numbering a session this buffer holds no state for.
+Set by `scholia-core' to the numbering the effective sessions give.
+Without it a session no state names would take the number of the first,
+and the two would be drawn in one colour.")
+
+(defun scholia-session-color-index (session)
+  "Return SESSION's index into `scholia-session-colors' in this buffer."
+  (let ((entry (assoc-string session scholia--session-state)))
+    (or (and entry (plist-get (cdr entry) :color-offset))
+        (funcall scholia-session-color-index-function session)
+        0)))
 
 (defun scholia-annotation-p (overlay)
   "Return non-nil when OVERLAY is an annotation.

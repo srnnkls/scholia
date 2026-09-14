@@ -16,6 +16,8 @@
 (depends-on "emacs" "29.1")
 
 (development
+ (depends-on "corfu")
+ (depends-on "evil")
  (depends-on "git-timemachine")
  (depends-on "magit")
  (depends-on "magit-section")

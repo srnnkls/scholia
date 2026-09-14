@@ -693,13 +693,13 @@ empty a file scholia never made."
         (should-not (scholia-db-files session))
         (should-not (member "ghost" (scholia-session-list)))
         (let ((target (default-value 'scholia-session))
-              (active (copy-sequence (default-value 'scholia-active-sessions))))
+              (active (copy-sequence (default-value 'scholia-visible-sessions))))
           (unwind-protect
               (progn
                 (scholia-session-create "ghost")
                 (should (member "ghost" (scholia-session-list))))
             (set-default 'scholia-session target)
-            (set-default 'scholia-active-sessions active)))
+            (set-default 'scholia-visible-sessions active)))
         (scholia-db-store-record session record)
         (should (equal (scholia-db-record session file) record))
         (let ((connection (sqlite-open foreign)))
@@ -723,13 +723,13 @@ session directory that lists as empty and litters for good, since
       (should-not (directory-files scholia-session-directory nil
                                    directory-files-no-dot-files-regexp))
       (let ((target (default-value 'scholia-session))
-            (active (copy-sequence (default-value 'scholia-active-sessions))))
+            (active (copy-sequence (default-value 'scholia-visible-sessions))))
         (unwind-protect
             (progn
               (scholia-session-create "unborn-clean")
               (should (member "unborn-clean" (scholia-session-list))))
           (set-default 'scholia-session target)
-          (set-default 'scholia-active-sessions active))))))
+          (set-default 'scholia-visible-sessions active))))))
 
 (ert-deftest scholia-store-two-migrations-of-one-eld-keep-both-results ()
   "Two Emacs processes migrating one printed session keep every write.

@@ -127,7 +127,7 @@ Replies follow their `:reply-to' parents in the same record to a position."
     (when-let* ((buffer (find-buffer-visiting file)))
       (with-current-buffer buffer
         (when scholia-mode (scholia-save-annotations))))
-    (scholia-session-activate session)
+    (scholia-session-show session)
     (setq annotation (scholia-locate-open file annotation))
     (if scholia-mode
         (progn

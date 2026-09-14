@@ -20,12 +20,16 @@
 (require 'thingatpt)
 (require 'scholia-vars)
 (require 'scholia-overlay)
+(require 'scholia-render)
 (require 'scholia-db)
+(require 'scholia-thread)
 (require 'scholia-locate)
 
 (declare-function scholia-ui-read-annotation "scholia-ui")
+(declare-function scholia-session-restore-visibility "scholia-session")
 
 (defvar scholia-mode)
+(defvar scholia-edit--session)
 
 
 ;;;; What a buffer annotates, and into which session
@@ -84,14 +88,91 @@ the project rung would never be reached."
             (lambda (name)
               (and (scholia-session-name-p name)
                    (file-exists-p (scholia-session-file name))))
-            scholia-active-sessions)))))
+            scholia-visible-sessions)))))
 
 (defun scholia-core--color-offset (session)
-  "Return the configured colour offset for SESSION in this buffer."
-  (let* ((sessions (scholia-effective-sessions))
-         (index (or (seq-position sessions session #'equal) 0))
-         (cycle scholia-session-color-cycle))
-    (if cycle (nth (mod index (length cycle)) cycle) 0)))
+  "Return SESSION's colour index, claiming one when it has none yet.
+The index lives in the session's own header rather than in where it
+stands among the others, so it survives making, renaming and removing
+sessions beside it, and survives Emacs."
+  (let* ((session (or session (scholia-session-name)))
+         (file (condition-case nil (scholia-session-file session) (error nil))))
+    (or (scholia-core--stored-color file)
+        (scholia-core--claim-color file)
+        0)))
+
+(defvar scholia-core--claimed-colors nil
+  "Alist of session file to the colour index claimed for it.
+A session annotated into before it has a file of its own claims its
+index here, so the file that appears later is written with the colour
+already on screen rather than with whichever one is free by then.")
+
+(defun scholia-core--stored-color (file)
+  "Return the colour index stored in session FILE, or nil when it has none."
+  (let ((color (and file
+                    (condition-case nil
+                        (scholia-db-session-color file)
+                      (error nil)))))
+    (and (integerp color) color)))
+
+(defun scholia-core--claim-color (file)
+  "Return the lowest colour index no other session took, storing it in FILE.
+A session claims one the first time it is drawn and reads it back after,
+so making, renaming or removing another session never moves it.  One
+with no file of its own yet only registers the claim, since drawing a
+buffer must leave the directory as it found it, and the file that
+appears later is written with that same index."
+  (let ((claimed (cdr (assoc file scholia-core--claimed-colors))))
+    (unless claimed
+      (let ((taken (append
+                    (delq nil (mapcar #'scholia-core--stored-color
+                                      (remove file
+                                              (scholia-core--session-files))))
+                    (delq nil (mapcar (lambda (entry)
+                                        (unless (equal (car entry) file)
+                                          (cdr entry)))
+                                      (scholia-core--claims-here)))))
+            (index 0))
+        (while (memq index taken)
+          (setq index (1+ index)))
+        (setq claimed index)
+        (push (cons file claimed) scholia-core--claimed-colors)))
+    (when (and file (file-exists-p file))
+      (condition-case nil
+          (scholia-db-set-session-color file claimed)
+        (error nil)))
+    claimed))
+
+(defun scholia-core--session-files ()
+  "Return the session files of `scholia-session-directory'."
+  (mapcar #'scholia-session-file (scholia-core--session-names)))
+
+(defun scholia-core--claims-here ()
+  "Return the claims made for sessions of `scholia-session-directory'.
+A claim names the file it was made for, and a colour is only ever free or
+taken within one directory, so claims left over from another one say
+nothing about this one."
+  (let ((directory (scholia--directory-name scholia-session-directory)))
+    (seq-filter (lambda (entry)
+                  (equal (scholia--directory-name
+                          (file-name-directory (car entry)))
+                         directory))
+                scholia-core--claimed-colors)))
+
+(defun scholia-core--session-names ()
+  "Return the names of the sessions in `scholia-session-directory'.
+A file of that directory holding no session header is none of ours and
+is passed over rather than raised."
+  (when (file-directory-p scholia-session-directory)
+    (seq-filter
+     (lambda (name)
+       (condition-case nil
+           (scholia-db-session-file-p (scholia-session-file name))
+         (error nil)))
+     (mapcar #'file-name-base
+             (directory-files scholia-session-directory nil "\\.eld\\'")))))
+
+(setq scholia-session-color-index-function #'scholia-core--color-offset)
 
 (defun scholia-core--session-state (session)
   "Return the mutable state plist for SESSION in this buffer."
@@ -228,9 +309,7 @@ however often it is stored and whatever the edits in between."
            (scholia-db-annotation-id annotation))
       (when-let* ((revision (scholia-db-annotation-revision annotation)))
         (overlay-put (car chain) 'scholia-core--revision revision)
-        (overlay-put (car chain) 'after-string
-                     (concat (overlay-get (car chain) 'after-string)
-                             (format " [%s]" revision))))
+        (scholia-render-chain chain))
       chain)))
 
 
@@ -333,6 +412,8 @@ however often it is stored and whatever the edits in between."
 (defun scholia-save-annotations ()
   "Store every visible session's annotations under their owners."
   (interactive)
+  (when (bound-and-true-p scholia-edit--session)
+    (user-error "Finish the annotation first: RET saves, ESC cancels"))
   (dolist (session (scholia-effective-sessions))
     (scholia-core--store
      (scholia-core--buffer-annotations session) session)))
@@ -454,6 +535,7 @@ naming the session itself still gets the signal from
        (if revision checksum (scholia-db-record-checksum record)))
       checksum)
      session)
+    (scholia-core--cache-replies (scholia-db-record-annotations record))
     (when hidden
       (scholia-core--report
        (concat "%d revision annotations hidden; set "
@@ -475,9 +557,66 @@ naming the session itself still gets the signal from
             scholia--unplaced-annotations
             (scholia-core--state-get session :unplaced)))))
 
+(defun scholia-core--redraw-buffer (&rest _)
+  "Draw every chain's note again, fitting it to the window it is shown in."
+  (dolist (chain (scholia-buffer-chains))
+    (scholia-render-chain chain)))
+
+(defun scholia-core--watch-window-size ()
+  "Redraw this buffer's notes whenever the window showing it is resized."
+  (add-hook 'window-size-change-functions #'scholia-core--redraw-buffer nil t))
+
+(defun scholia-core--unwatch-window-size ()
+  "Stop redrawing this buffer's notes when its window is resized."
+  (remove-hook 'window-size-change-functions
+               #'scholia-core--redraw-buffer t))
+
+(defun scholia-core--cache-replies (annotations)
+  "Hold the replies among ANNOTATIONS against the chains they answer."
+  (dolist (chain (scholia-buffer-chains))
+    (let* ((id (scholia-core--chain-id chain))
+           (root (seq-find (lambda (candidate)
+                             (equal (scholia-db-annotation-id candidate) id))
+                           annotations)))
+      (when root
+        (let ((lines
+               (apply
+                #'append
+                (scholia-thread-walk
+                 (cons root (seq-filter #'scholia-db-annotation-reply-p
+                                        annotations))
+                 (lambda (annotation depth)
+                   (unless (zerop depth)
+                     (mapcar (lambda (line) (cons depth line))
+                             (split-string
+                              (scholia-db-annotation-text annotation)
+                              "\n"))))))))
+          (setf (alist-get (overlay-get (car chain) 'scholia--chain-id)
+                           scholia--replies)
+                lines)
+          (scholia-render-chain chain))))))
+
+(defvar scholia-core--visibility-restored nil
+  "Whether the stored visibility has been read in this Emacs yet.
+Read once, before the first buffer is drawn, so a session shown and then
+hidden during a sitting is not brought back by the next buffer opened.")
+
+(defun scholia-core--restore-visibility-once ()
+  "Read the stored visibility the first time a buffer is drawn."
+  (unless scholia-core--visibility-restored
+    (setq scholia-core--visibility-restored t)
+    (when scholia-persist-visibility
+      (require 'scholia-session)
+      (condition-case failure
+          (scholia-session-restore-visibility)
+        (error (scholia-core--report "Scholia could not read its state: %S"
+                                     failure))))))
+
 (defun scholia-initialize ()
   "Render every effective session and arm saving for this buffer."
+  (scholia-core--restore-visibility-once)
   (scholia-core--fall-back-to-default)
+  (scholia-core--watch-window-size)
   (add-hook 'kill-buffer-hook #'scholia-core--save-on-kill nil t)
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
   (unless (scholia-buffer-chains)
@@ -508,8 +647,11 @@ only once no annotated buffer is left to need it."
   (dolist (chain (scholia-buffer-chains))
     (dolist (overlay chain)
       (delete-overlay overlay)))
+  (scholia-render-clear)
   (scholia-disarm-rechaining)
+  (scholia-core--unwatch-window-size)
   (setq scholia--session-state nil
+        scholia--replies nil
         scholia--unplaced-annotations nil
         scholia--hidden-revision-annotations nil)
   (remove-hook 'kill-buffer-hook #'scholia-core--save-on-kill t)
@@ -551,7 +693,9 @@ When ALTERNATE is non-nil, omit the current write target."
 (defun scholia-annotate (&optional text owner)
   "Annotate the active region or symbol with TEXT for OWNER.
 OWNER defaults to the buffer's resolved write target.  Interactively, a
-prefix selects another effective session."
+prefix selects another effective session.
+`scholia-annotation-editor' selects the input interface.  The inline
+editor stores annotations after accepting input and removing its field."
   (interactive
    (list nil (and current-prefix-arg
                   (scholia-core--read-owner "Annotate in session: " t))))
@@ -570,12 +714,14 @@ prefix selects another effective session."
       (let ((note (or text
                       (progn
                         (require 'scholia-ui)
-                        (scholia-ui-read-annotation)))))
+                        (scholia-ui-read-annotation nil bounds)))))
         (if (string= note "")
             (scholia-core--report "Annotation text is empty")
           (scholia-core--session-state owner)
           (scholia-create-chain (car bounds) (cdr bounds) note nil owner)
-          (deactivate-mark)))))))
+          (deactivate-mark)
+          (when (and (not text) (eq scholia-annotation-editor 'inline))
+            (scholia-save-annotations))))))))
 
 (defun scholia-core--chain-candidate (chain)
   "Return the completion candidate identifying CHAIN."
@@ -606,19 +752,46 @@ prefix selects another effective session."
       (mapc #'delete-overlay chain)
     (scholia-core--report "No annotation at point")))
 
+(defun scholia-edit-annotation (&optional text)
+  "Replace the selected annotation at point with TEXT.
+Without TEXT, use `scholia-annotation-editor' with the existing note as
+initial input.  Preserve its owner, bounds, identity, color, and replies.
+The inline editor stores the change after removing its temporary field."
+  (interactive)
+  (if-let* ((chain (scholia-core--select-chain)))
+      (let ((note (or text
+                      (progn
+                        (require 'scholia-ui)
+                        (scholia-ui-read-annotation
+                         (overlay-get (car chain) 'scholia-annotation)
+                         (cons (overlay-start (car chain))
+                               (overlay-end (car (last chain)))))))))
+        (if (string-empty-p note)
+            (scholia-core--report "Annotation text is empty")
+          (scholia-set-chain-text chain note)
+          (when (and (not text) (eq scholia-annotation-editor 'inline))
+            (scholia-save-annotations))))
+    (scholia-core--report "No annotation at point")))
+
 (defun scholia-reply-to (&optional text)
   "Store a reply with TEXT under the selected annotation at point."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
-      (let ((owner (scholia-chain-owner chain)))
+      (let ((owner (scholia-chain-owner chain))
+            (note (or text (read-string "Reply: "))))
         (scholia-core--store
          (append (scholia-core--buffer-annotations owner)
                  (list (scholia-db-make-annotation
-                        (scholia-core--make-id)
-                        (or text (read-string "Reply: "))
+                        (scholia-core--make-id) note
                         nil nil nil nil nil
                         (scholia-core--chain-id chain))))
-         owner))
+         owner)
+        (let ((key (overlay-get (car chain) 'scholia--chain-id)))
+          (setf (alist-get key scholia--replies)
+                (append (alist-get key scholia--replies)
+                        (mapcar (lambda (line) (cons 1 line))
+                                (split-string note "\n")))))
+        (scholia-render-chain chain))
     (scholia-core--report "No annotation at point")))
 
 (defun scholia-goto-next-annotation ()

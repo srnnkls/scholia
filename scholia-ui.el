@@ -21,6 +21,8 @@
 (eval-when-compile
   (defvar marginalia-annotators))
 
+(declare-function scholia-edit-read "scholia-edit" (table &optional initial bounds))
+
 (defconst scholia-ui--marginalia-entry
   '(scholia-annotation scholia-ui-marginalia-annotator builtin none)
   "Marginalia registry entry for Scholia annotation completion.")
@@ -44,16 +46,23 @@
             (scholia-search-annotations)))
    scholia-annotation-history-limit))
 
-(defun scholia-ui-read-annotation ()
-  "Read an annotation text with recurring annotations as candidates."
-  (let ((candidates (scholia-ui--annotation-candidates)))
-    (completing-read
-     "Annotation: "
-     (lambda (string predicate action)
-       (if (eq action 'metadata)
-           '(metadata (category . scholia-annotation))
-         (complete-with-action action candidates string predicate)))
-     nil nil)))
+(defun scholia-ui-read-annotation (&optional initial bounds)
+  "Read annotation text, starting with INITIAL and offering recurring notes.
+Use the interface selected by `scholia-annotation-editor'.
+BOUNDS is the (BEGIN . END) source range to preview during inline input."
+  (let* ((candidates (scholia-ui--annotation-candidates))
+         (table
+          (lambda (string predicate action)
+            (if (eq action 'metadata)
+                '(metadata (category . scholia-annotation)
+                           (annotation-function . scholia-ui-marginalia-annotator))
+              (complete-with-action action candidates string predicate)))))
+    (pcase-exhaustive scholia-annotation-editor
+      ('inline
+        (require 'scholia-edit)
+        (scholia-edit-read table initial bounds))
+      ('minibuffer
+       (completing-read "Annotation: " table nil nil initial)))))
 
 (defun scholia-ui-marginalia-annotator (candidate)
   "Return prior-use metadata for annotation CANDIDATE."

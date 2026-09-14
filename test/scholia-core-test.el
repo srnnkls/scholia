@@ -659,7 +659,7 @@ Emacs whose ERT sets the variable."
 
 (ert-deftest scholia-multisession-non-file-source-saves-reloads-and-exports-fallbacks ()
   (let* ((globals '(scholia-session
-                    scholia-active-sessions
+                    scholia-visible-sessions
                     scholia-autosave
                     scholia-source-snapshot-mode
                     scholia-source-snapshot-limit))
@@ -671,7 +671,7 @@ Emacs whose ERT sets the variable."
     (unwind-protect
         (progn
           (set-default 'scholia-session nil)
-          (set-default 'scholia-active-sessions nil)
+          (set-default 'scholia-visible-sessions nil)
           (set-default 'scholia-autosave nil)
           (set-default 'scholia-source-snapshot-mode 'bounded-full)
           (cl-labels

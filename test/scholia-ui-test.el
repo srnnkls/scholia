@@ -57,14 +57,14 @@
   `(scholia-test-with-session-directory
      (scholia-ui-test--require)
      (let ((session-default (default-value 'scholia-session))
-           (active-default (copy-sequence (default-value 'scholia-active-sessions))))
+           (active-default (copy-sequence (default-value 'scholia-visible-sessions))))
        (unwind-protect
            (progn
              (set-default 'scholia-session nil)
-             (set-default 'scholia-active-sessions nil)
+             (set-default 'scholia-visible-sessions nil)
              (let ((current-prefix-arg nil)
                    (scholia-session nil)
-                   (scholia-active-sessions nil)
+                   (scholia-visible-sessions nil)
                    (scholia-project-sessions nil)
                    (scholia-project-root-function (lambda () nil))
                    (scholia-autosave nil)
@@ -72,7 +72,7 @@
                     (expand-file-name "assignments.eld" scholia-session-directory)))
                ,@body))
          (set-default 'scholia-session session-default)
-         (set-default 'scholia-active-sessions active-default)))))
+         (set-default 'scholia-visible-sessions active-default)))))
 
 (ert-deftest scholia-ui-offers-each-global-annotation-text-once ()
   "Completion aggregates recurring texts from every session."

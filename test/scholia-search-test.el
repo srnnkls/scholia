@@ -57,13 +57,13 @@ into cannot leak into the next one."
   `(scholia-test-with-session-directory
      (scholia-search-test--require)
      (let ((session-default (default-value 'scholia-session))
-           (active-default (copy-sequence (default-value 'scholia-active-sessions))))
+           (active-default (copy-sequence (default-value 'scholia-visible-sessions))))
        (unwind-protect
            (progn
              (set-default 'scholia-session nil)
-             (set-default 'scholia-active-sessions nil)
+             (set-default 'scholia-visible-sessions nil)
              (let ((scholia-session nil)
-                   (scholia-active-sessions nil)
+                   (scholia-visible-sessions nil)
                    (scholia-project-sessions nil)
                    (scholia-project-root-function (lambda () nil))
                    (scholia-autosave nil)
@@ -72,7 +72,7 @@ into cannot leak into the next one."
                     (expand-file-name "assignments.eld" scholia-session-directory)))
                ,@body))
          (set-default 'scholia-session session-default)
-         (set-default 'scholia-active-sessions active-default)))))
+         (set-default 'scholia-visible-sessions active-default)))))
 
 (defmacro scholia-search-test--choosing (needle &rest body)
   "Evaluate BODY with `completing-read' answering the candidate matching NEEDLE.
@@ -266,14 +266,14 @@ one and it lands nowhere."
           (progn
             (scholia-search-test--choosing "the far note" (scholia-search))
             (should (equal "here" (default-value 'scholia-session)))
-            (should (equal '("there") (default-value 'scholia-active-sessions)))
+            (should (equal '("there") (default-value 'scholia-visible-sessions)))
             (should (zerop switches))
             (goto-char 7)
             (scholia-annotate "the unsaved note")
             (scholia-search-test--choosing "the far note" (scholia-search))
             (should (= 1 (point)))
             (should (equal "here" (default-value 'scholia-session)))
-            (should (equal '("there") (default-value 'scholia-active-sessions)))
+            (should (equal '("there") (default-value 'scholia-visible-sessions)))
             (should (zerop switches))
             (should (equal '("the far note")
                            (mapcar #'scholia-db-annotation-text
@@ -418,7 +418,7 @@ sends the reader to a place nobody annotated."
             (scholia-annotate "beta unsaved")
             (scholia-search-test--choosing "alpha note" (scholia-search))
             (should (equal "beta" (scholia-session-name)))
-            (should (member "alpha" (default-value 'scholia-active-sessions)))
+            (should (member "alpha" (default-value 'scholia-visible-sessions)))
             (should (= 1 (point)))
             (should (equal '("alpha note" "beta note" "beta unsaved")
                            (sort (mapcar (lambda (chain)
@@ -590,7 +590,7 @@ sends the reader to a place nobody annotated."
                          candidate))))
             (scholia-search-sends)
             (should (equal "default" (scholia-session-name)))
-            (should (member "planning" (default-value 'scholia-active-sessions)))
+            (should (member "planning" (default-value 'scholia-visible-sessions)))
             (should (equal file (buffer-file-name)))
             (should (= 1 (point))))
         (scholia-search-test--forget file)))))

@@ -21,6 +21,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'scholia-db)
+(require 'scholia-color)
 
 (defconst scholia-thread--indent-width 2
   "Columns a reply is set in past the annotation it answers.")
@@ -83,32 +84,11 @@ points, so a cycle an imported session carries terminates."
 
 ;;;; The renderer
 
-(defun scholia-thread--root (annotation annotations)
-  "Return the positioned root inherited by ANNOTATION in ANNOTATIONS."
-  (let ((root annotation)
-        (seen nil))
-    (while (and (scholia-db-annotation-reply-p root)
-                (not (member (scholia-db-annotation-id root) seen)))
-      (push (scholia-db-annotation-id root) seen)
-      (setq root
-            (seq-find
-             (lambda (candidate)
-               (equal (scholia-db-annotation-id candidate)
-                      (scholia-db-annotation-reply-to root)))
-             annotations)))
-    (or root annotation)))
-
-(defun scholia-thread--face (annotation annotations depth)
-  "Return ANNOTATION's face at DEPTH within ANNOTATIONS."
-  (let* ((root (scholia-thread--root annotation annotations))
-         (index (or (scholia-db-annotation-color root) 0))
-         (face (copy-tree
-                (nth (mod index (length scholia-annotation-text-faces))
-                     scholia-annotation-text-faces))))
-    (if (zerop depth) face (plist-put face :weight 'normal))))
-
-(defun scholia-thread-render (annotations)
+(defun scholia-thread-render (annotations &optional color)
   "Insert the threads of ANNOTATIONS at point, a line per line of note.
+COLOR is the colour of the session they were read from, defaulting to
+the first of `scholia-session-colors'; a reply is set in the tint of that
+colour its depth gives it.
 Every note is set in one step past the note it answers, and a note
 carrying several lines sets each of them there, so its own lines stay
 flush with one another and every reply still reads as the deeper one.
@@ -118,21 +98,22 @@ as many spaces, since the indent alone leaves a continuation line and a
 sibling reply carrying the same text identical.  Each line is a button of
 its own carrying the annotation in the `scholia-annotation' property, so
 a multi-line note answers wherever it is clicked."
-  (scholia-thread-walk
-   annotations
-   (lambda (annotation depth)
-     (let ((indent (make-string (* depth scholia-thread--indent-width) ?\s))
-           (opening (make-string (length scholia-thread--continuation-string)
-                                 ?\s))
-           (lines (split-string (scholia-db-annotation-text annotation) "\n")))
-       (dolist (line lines)
-         (insert indent opening)
-         (insert-text-button
-          line
-          'scholia-annotation annotation
-          'face (scholia-thread--face annotation annotations depth))
-         (insert "\n")
-         (setq opening scholia-thread--continuation-string))))))
+  (let ((color (or color (scholia-color-for-index 0))))
+    (scholia-thread-walk
+     annotations
+     (lambda (annotation depth)
+       (let ((indent (make-string (* depth scholia-thread--indent-width) ?\s))
+             (opening (make-string (length scholia-thread--continuation-string)
+                                   ?\s))
+             (face (scholia-color-note-face color depth))
+             (lines (split-string (scholia-db-annotation-text annotation) "\n")))
+         (dolist (line lines)
+           (insert indent opening)
+           (insert-text-button line
+                               'scholia-annotation annotation
+                               'face face)
+           (insert "\n")
+           (setq opening scholia-thread--continuation-string)))))))
 
 (provide 'scholia-thread)
 ;;; scholia-thread.el ends here

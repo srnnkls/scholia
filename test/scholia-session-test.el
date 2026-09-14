@@ -35,7 +35,7 @@ Point at 1 sits on \"alpha\" and point at 12 on \"gamma\".")
 
 (defconst scholia-session-test--globals
   '(scholia-session
-    scholia-active-sessions
+    scholia-visible-sessions
     scholia-project-sessions
     scholia-project-root-function
     scholia-autosave
@@ -60,6 +60,15 @@ before the module defines it leaves it undefined again."
         (set-default (nth 0 entry) (nth 2 entry))
       (makunbound (nth 0 entry)))))
 
+(defun scholia-session-test--quiesce ()
+  "Take down every annotated buffer an earlier test left behind.
+A session command saves every buffer command `scholia-mode' is on in, and
+one left over from another fixture resolves into this fixture's session
+directory, where it would mint a session file no test here made."
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'scholia-mode buffer)
+      (with-current-buffer buffer (scholia-shutdown nil)))))
+
 (defmacro scholia-session-test--with-state (&rest body)
   "Evaluate BODY with a session directory and the session globals of its own.
 The project bindings start empty, the project root function answers with
@@ -72,8 +81,9 @@ directory.  Everything is put back when BODY exits, however it exits."
        (let ((,snapshot (scholia-session-test--snapshot)))
          (unwind-protect
              (progn
+               (scholia-session-test--quiesce)
                (set-default 'scholia-session nil)
-               (set-default 'scholia-active-sessions nil)
+               (set-default 'scholia-visible-sessions nil)
                (set-default 'scholia-project-sessions nil)
                (set-default 'scholia-project-root-function (lambda () nil))
                (set-default 'scholia-autosave nil)
@@ -321,7 +331,7 @@ every save and every load, since `scholia-session-file' resolves each time."
                      "notes"))
       (should-not (scholia-db-files (scholia-session-file "notes")))
       (should (equal (default-value 'scholia-session) "notes"))
-      (should (equal scholia-active-sessions '("notes")))
+      (should-not scholia-visible-sessions)
       (should (equal (scholia-session-name) "notes"))
       (should (member "notes" (scholia-session-list)))
       (should-error (scholia-session-create "sub/escaped") :type 'scholia-error)
@@ -334,6 +344,119 @@ every save and every load, since `scholia-session-file' resolves each time."
       (should (equal (scholia-session-test--texts
                       (scholia-session-test--stored "notes" "/nowhere/kept.txt"))
                      '("already stored"))))))
+
+
+(ert-deftest scholia-session-create-keeps-the-session-it-annotated-into ()
+  "Creating switches away, and showing the old session brings it back."
+  (scholia-session-test--with-state
+    (scholia-test-with-temp-file-buffer _buffer scholia-session-test--source
+      (scholia-mode 1)
+      (goto-char 1)
+      (scholia-annotate "first in default")
+      (scholia-session-create "bla")
+      (should (equal (default-value 'scholia-session) "bla"))
+      (should-not scholia-visible-sessions)
+      (should-not (scholia-session-test--chain-texts))
+      (goto-char 12)
+      (scholia-annotate "second in bla")
+      (should (equal (scholia-session-test--chain-texts) '("second in bla")))
+      (scholia-session-show "default")
+      (let ((chains (scholia-buffer-chains)))
+        (should (equal (sort (mapcar #'scholia-chain-owner chains) #'string<)
+                       '("bla" "default")))
+        (should (equal (length (delete-dups
+                                (mapcar (lambda (chain)
+                                          (overlay-get (car chain) 'face))
+                                        chains)))
+                       2)))
+      (scholia-session-hide "default")
+      (should (equal (scholia-session-test--chain-texts) '("second in bla")))
+      (should-error (scholia-session-hide "bla") :type 'scholia-error))))
+
+
+(ert-deftest scholia-session-create-leaves-the-colours-already-given-alone ()
+  "Making a session never moves the colour any other session wears."
+  (scholia-session-test--with-state
+    (scholia-test-with-temp-file-buffer _buffer scholia-session-test--source
+      (scholia-mode 1)
+      (goto-char 1)
+      (scholia-annotate "in default")
+      (let ((drawn (overlay-get (scholia-session-test--first-overlay) 'face)))
+        (dolist (name '("second" "third" "fourth"))
+          (scholia-session-create name)
+          (scholia-session-show "default")
+          (let ((chain (seq-find (lambda (candidate)
+                                   (equal (scholia-chain-owner candidate)
+                                          "default"))
+                                 (scholia-buffer-chains))))
+            (should chain)
+            (should (equal (overlay-get (car chain) 'face) drawn)))
+          (scholia-session-hide "default"))
+        (should (equal (scholia-session-color-index "default") 0))))))
+
+(ert-deftest scholia-session-a-colour-is-stored-and-read-back ()
+  "A session's colour lives in its header and outlives the buffer drawing it."
+  (scholia-session-test--with-state
+    (dolist (name '("alpha" "beta" "gamma"))
+      (scholia-session-create name))
+    (let ((claimed (mapcar (lambda (name)
+                             (with-temp-buffer
+                               (let ((scholia-session name))
+                                 (scholia-session-color-index name))))
+                           '("alpha" "beta" "gamma"))))
+      (should (equal (length (delete-dups (copy-sequence claimed))) 3))
+      (should (equal claimed
+                     (mapcar (lambda (name)
+                               (scholia-db-session-color
+                                (scholia-session-file name)))
+                             '("alpha" "beta" "gamma"))))
+      (scholia-session-delete "beta" t)
+      (should (equal (scholia-db-session-color (scholia-session-file "gamma"))
+                     (nth 2 claimed))))))
+
+
+(ert-deftest scholia-session-visibility-outlives-emacs-only-when-asked ()
+  "What is shown is kept across sittings exactly when the option says so."
+  (scholia-session-test--with-state
+    (dolist (name '("default" "alpha" "beta"))
+      (scholia-session-create name))
+    (set-default 'scholia-session "default")
+    (let ((scholia-persist-visibility nil))
+      (scholia-session-show "alpha")
+      (setq scholia--state-cache nil)
+      (should-not (plist-get (scholia-stored-state) :visible))
+      (should-not (scholia-session-restore-visibility)))
+    (let ((scholia-persist-visibility t))
+      (scholia-session-show "beta")
+      (setq scholia--state-cache nil)
+      (should (equal (plist-get (scholia-stored-state) :visible)
+                     '("alpha" "beta")))
+      (should (equal (plist-get (scholia-stored-state) :session) "default"))
+      (set-default 'scholia-visible-sessions nil)
+      (set-default 'scholia-session "alpha")
+      (should (equal (scholia-session-restore-visibility) '("alpha" "beta")))
+      (should (equal scholia-visible-sessions '("alpha" "beta")))
+      (should (equal (default-value 'scholia-session) "default"))
+      (scholia-session-delete "beta" t)
+      (set-default 'scholia-visible-sessions '("alpha" "beta"))
+      (should (equal (scholia-session-restore-visibility) '("alpha"))))))
+
+(ert-deftest scholia-session-state-file-keeps-a-bare-assignment-alist ()
+  "A state file written before visibility was kept still resolves projects."
+  (scholia-session-test--with-state
+    (let ((root (file-name-as-directory (make-temp-file "scholia-root-" t))))
+      (unwind-protect
+          (progn
+            (with-temp-file scholia-session-state-file
+              (prin1 (list (cons root "legacy")) (current-buffer)))
+            (setq scholia--state-cache nil)
+            (should (equal (scholia-stored-assignments)
+                           (list (cons root "legacy"))))
+            (should-not (plist-get (scholia-stored-state) :visible))
+            (set-default 'scholia-project-root-function (lambda () root))
+            (with-temp-buffer
+              (should (equal (scholia-session-name) "legacy"))))
+        (delete-directory root t)))))
 
 
 ;;;; Switching
@@ -369,7 +492,7 @@ every save and every load, since `scholia-session-file' resolves each time."
           (should-not defaults-at-hook)
           (scholia-session-switch "beta")
           (should (equal (default-value 'scholia-session) "beta"))
-          (should (equal scholia-active-sessions '("alpha" "beta")))
+          (should-not scholia-visible-sessions)
           (should (equal defaults-at-hook '("beta")))
           (should (equal (scholia-session-test--texts
                           (scholia-session-test--stored "beta" incoming-file))
@@ -385,9 +508,19 @@ every save and every load, since `scholia-session-file' resolves each time."
             (should (equal scholia-session "beta"))
             (should scholia-mode))
           (with-current-buffer outgoing
+            (should-not (scholia-session-test--chain-texts))
+            (should scholia-mode))
+          (scholia-session-show "alpha")
+          (with-current-buffer outgoing
             (should (equal (scholia-session-test--chain-texts)
-                           '("on the outgoing buffer")))
-            (should scholia-mode)))))))
+                           '("on the outgoing buffer"))))
+          (scholia-session-switch "alpha")
+          (should-not scholia-visible-sessions)
+          (scholia-session-switch "beta" t)
+          (should (equal scholia-visible-sessions '("alpha")))
+          (with-current-buffer outgoing
+            (should (equal (scholia-session-test--chain-texts)
+                           '("on the outgoing buffer")))))))))
 
 (ert-deftest scholia-session-switch-leaves-a-project-bound-buffer-alone ()
   (scholia-session-test--with-state
@@ -409,7 +542,7 @@ every save and every load, since `scholia-session-file' resolves each time."
                 (let ((overlay (scholia-session-test--first-overlay)))
                   (scholia-session-switch "beta")
                   (should (equal (default-value 'scholia-session) "beta"))
-                  (should (equal scholia-active-sessions '("alpha" "beta" "gamma")))
+                  (should-not scholia-visible-sessions)
                   (should (equal (scholia-session-name) "gamma"))
                   (should-not (scholia-annotation-p overlay))
                   (should (equal (scholia-session-test--chain-texts)
@@ -759,7 +892,7 @@ comes back holding the deleted session's annotations verbatim."
       (should-not (file-exists-p (scholia-session-file "moved")))
       (should-not (file-exists-p exported)))
     (let* ((root (file-name-as-directory (make-temp-file "scholia-root-" t)))
-           (scholia--assignment-cache nil)
+           (scholia--state-cache nil)
            (live (generate-new-buffer " *scholia-session-alpha*"))
            (old-state nil)
            (assignment-cache nil))
@@ -772,8 +905,8 @@ comes back holding the deleted session's annotations verbatim."
               (setq-local scholia-session "alpha"))
             (with-temp-buffer
               (scholia-session-assign-project "alpha"))
-            (should scholia--assignment-cache)
-            (setq assignment-cache (copy-tree scholia--assignment-cache))
+            (should scholia--state-cache)
+            (setq assignment-cache (copy-tree scholia--state-cache))
             (setq old-state
                   (with-temp-buffer
                     (set-buffer-multibyte nil)
@@ -791,7 +924,7 @@ comes back holding the deleted session's annotations verbatim."
             (should (buffer-live-p live))
             (with-current-buffer live
               (should (equal scholia-session "alpha")))
-            (should (equal scholia--assignment-cache assignment-cache))
+            (should (equal scholia--state-cache assignment-cache))
             (should (equal scholia-project-sessions (list (cons root "alpha"))))
             (should (equal (with-temp-buffer
                              (set-buffer-multibyte nil)
@@ -815,7 +948,7 @@ comes back holding the deleted session's annotations verbatim."
              (prompted 0)
              candidates)
         (set-default 'scholia-session "alpha")
-        (set-default 'scholia-active-sessions '("beta"))
+        (set-default 'scholia-visible-sessions '("beta"))
         (scholia-db-save (scholia-session-file "alpha") file (list alpha) checksum)
         (scholia-db-save (scholia-session-file "beta") file (list beta) checksum)
         (scholia-mode 1)
@@ -874,7 +1007,7 @@ comes back holding the deleted session's annotations verbatim."
             (set-default 'scholia-project-sessions (list (cons root "project")))
             (dolist (name '("global" "project" "alpha" "beta" "jumped"))
               (scholia-session-create name))
-            (set-default 'scholia-active-sessions nil)
+            (set-default 'scholia-visible-sessions nil)
             (scholia-test-with-temp-file-buffer source scholia-session-test--source
               (let* ((file (buffer-file-name source))
                      (jump-file (expand-file-name "jump.txt" root))
@@ -897,7 +1030,7 @@ comes back holding the deleted session's annotations verbatim."
                  (list (scholia-session-test--annotation
                         "jump-id" "jump note" 1 5)))
                 (cl-labels ((active ()
-                              (sort (copy-sequence scholia-active-sessions) #'string<))
+                              (sort (copy-sequence scholia-visible-sessions) #'string<))
                             (visible ()
                               (sort (copy-sequence
                                      (scholia-session-test--chain-texts))
@@ -905,27 +1038,23 @@ comes back holding the deleted session's annotations verbatim."
                   (scholia-mode 1)
                   (should (equal (visible) '("project note")))
                   (scholia-session-create "created")
-                  (should (equal (active) '("created")))
+                  (should-not (active))
                   (should (equal (visible) '("project note")))
                   (should (equal (scholia-session-name) "project"))
                   (scholia-session-switch "beta")
-                  (should (equal (active) '("beta" "created")))
+                  (should-not (active))
                   (should (equal (default-value 'scholia-session) "beta"))
                   (should (equal (scholia-session-name) "project"))
-                  (should (equal (visible) '("beta note" "project note")))
-                  (scholia-session-activate "alpha")
-                  (should (equal (active) '("alpha" "beta" "created")))
-                  (should (equal (visible)
-                                 '("alpha note" "beta note" "project note")))
+                  (should (equal (visible) '("project note")))
+                  (scholia-session-show "alpha")
+                  (should (equal (active) '("alpha")))
+                  (should (equal (visible) '("alpha note" "project note")))
                   (scholia-session-rename "alpha" "omega")
-                  (should (equal (active) '("beta" "created" "omega")))
-                  (should (equal (visible)
-                                 '("alpha note" "beta note" "project note")))
-                  (scholia-session-deactivate "created")
-                  (should (equal (active) '("beta" "omega")))
+                  (should (equal (active) '("omega")))
+                  (should (equal (visible) '("alpha note" "project note")))
                   (scholia-session-delete "omega" t)
-                  (should (equal (active) '("beta")))
-                  (should (equal (visible) '("beta note" "project note")))
+                  (should-not (active))
+                  (should (equal (visible) '("project note")))
                   (require 'scholia-search)
                   (let ((entry (seq-find
                                 (lambda (candidate)
@@ -938,7 +1067,7 @@ comes back holding the deleted session's annotations verbatim."
                   (should (equal (default-value 'scholia-session) "beta"))
                   (should (equal scholia-project-sessions projects))
                   (should (equal (scholia-session-name) "project"))
-                  (should (member "jumped" scholia-active-sessions))
+                  (should (member "jumped" scholia-visible-sessions))
                   (should (equal (scholia-session-test--chain-texts)
                                  '("jump note"))))
                 (when-let* ((jump-buffer (find-buffer-visiting jump-file)))

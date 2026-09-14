@@ -99,6 +99,25 @@ the first write."
   (plist-get (scholia-db--reading session-file #'scholia-store-session)
              :created))
 
+(defun scholia-db-session-color (session-file)
+  "Return the colour index the session in SESSION-FILE was given, or nil."
+  (plist-get (scholia-db--reading session-file #'scholia-store-session)
+             :color))
+
+(defun scholia-db-set-session-color (session-file color)
+  "Give the session stored in SESSION-FILE the colour index COLOR.
+Written once, when the session first needs drawing, and read back from
+then on, so a session keeps its colour however many others are made,
+renamed or removed beside it."
+  (scholia-db--writing
+   session-file
+   (lambda (store)
+     (scholia-db--publish store session-file)
+     (scholia-store-put-session
+      store (scholia-db--with-fields (scholia-store-session store)
+                                     :color color))))
+  color)
+
 (defun scholia-db-set-session-name (session-file name)
   "Call the session stored in SESSION-FILE NAME from now on.
 Only the name is written: the rest of the header, and every record under

@@ -144,8 +144,8 @@ streams in the report."
     scholia-goto-previous-annotation
     scholia-session-create
     scholia-session-switch
-    scholia-session-activate
-    scholia-session-deactivate
+    scholia-session-show
+    scholia-session-hide
     scholia-session-rename
     scholia-session-delete
     scholia-session-import
@@ -269,7 +269,7 @@ cookies can make a command autoloadable."
   (should (get 'scholia 'custom-group))
   (dolist (symbol '(scholia-session-directory
                     scholia-session
-                    scholia-active-sessions
+                    scholia-visible-sessions
                     scholia-session-state-file
                     scholia-project-sessions
                     scholia-project-root-function
@@ -277,9 +277,9 @@ cookies can make a command autoloadable."
                     scholia-herdr-default-target
                     scholia-herdr-send-format
                     scholia-annotation-history-limit
-                    scholia-highlight-faces
-                    scholia-annotation-text-faces
-                    scholia-session-color-cycle
+                    scholia-session-colors
+                    scholia-reply-tint-step
+                    scholia-render-reply-indent
                     scholia-source-snapshot-mode
                     scholia-source-snapshot-limit
                     scholia-use-messages
@@ -291,27 +291,25 @@ cookies can make a command autoloadable."
     (should (string-suffix-p "scholia/sessions"
                              (directory-file-name directory))))
   (should-not (default-value 'scholia-session))
-  (should-not (default-value 'scholia-active-sessions))
+  (should-not (default-value 'scholia-visible-sessions))
   (should-not (default-value 'scholia-project-sessions))
   (should (functionp (default-value 'scholia-project-root-function)))
   (should (eq (default-value 'scholia-export-format) 'rustc))
   (should-not (default-value 'scholia-herdr-default-target))
   (should-not (default-value 'scholia-herdr-send-format))
   (should (equal (default-value 'scholia-annotation-history-limit) 200))
-  (should (equal (default-value 'scholia-session-color-cycle) '(0 1 2)))
   (should (eq (default-value 'scholia-source-snapshot-mode) 'bounded-full))
   (should (equal (default-value 'scholia-source-snapshot-limit) (* 256 1024)))
   (should (eq (default-value 'scholia-use-messages) t))
   (should (equal (default-value 'scholia-annotation-column) 85))
   (should (equal (default-value 'scholia-search-region-lines-delta) 2))
   (should (facep 'scholia-prefix))
-  (dolist (symbol '(scholia-highlight-faces scholia-annotation-text-faces))
-    (let ((value (default-value symbol)))
-      (should (consp value))
-      (should (equal (cons symbol
-                           (seq-remove #'scholia-vars-test--face-attribute-plist-p
-                                       value))
-                     (list symbol))))))
+  (should (equal (default-value 'scholia-reply-tint-step) 0.35))
+  (should (equal (default-value 'scholia-render-reply-indent) 2))
+  (let ((colors (default-value 'scholia-session-colors)))
+    (should (consp colors))
+    (should (seq-every-p #'stringp colors))
+    (should (equal colors (delete-dups (copy-sequence colors))))))
 
 (ert-deftest scholia-vars-project-root-prefers-projectile-and-normalizes ()
   (let ((alpha (file-name-as-directory (expand-file-name "~/alpha")))

@@ -137,30 +137,35 @@ Nil comes back when there is no project here."
   (scholia--directory-name
    (or root (funcall scholia-project-root-function))))
 
-(defun scholia-session--write-assignments (assignments)
-  "Store ASSIGNMENTS in `scholia-session-state-file'.
+(defun scholia-session--write-state (state)
+  "Store the state plist STATE in `scholia-session-state-file'.
 Written beside the store and renamed over it, which within one directory
-is atomic, so a write cut short leaves the assignments that were there
-before it whole.  The store is created at the mode `make-temp-file'
-gives it rather than at the umask."
+is atomic, so a write cut short leaves the state that was there before it
+whole.  The store is created at the mode `make-temp-file' gives it rather
+than at the umask."
   (when scholia-session-state-file
     (let* ((target (expand-file-name scholia-session-state-file))
            (directory (file-name-directory target)))
       (make-directory directory t)
       (let ((temporary (make-temp-file
-                        (expand-file-name "scholia-assignments-" directory)))
+                        (expand-file-name "scholia-state-" directory)))
             (print-length nil)
             (print-level nil))
         (unwind-protect
             (progn
               (with-temp-file temporary
-                (prin1 assignments (current-buffer))
+                (prin1 state (current-buffer))
                 (insert "\n"))
               (rename-file temporary target t))
           (when (file-exists-p temporary)
             (delete-file temporary)))))
-    (setq scholia--assignment-cache
-          (cons scholia-session-state-file assignments))))
+    (setq scholia--state-cache (cons scholia-session-state-file state))))
+
+(defun scholia-session--write-assignments (assignments)
+  "Store ASSIGNMENTS in `scholia-session-state-file', keeping the rest."
+  (scholia-session--write-state
+   (plist-put (copy-sequence (scholia-stored-state))
+              :assignments assignments)))
 
 (defun scholia-session--without-root (assignments root)
   "Return ASSIGNMENTS without the entry keying the directory ROOT."
@@ -190,7 +195,7 @@ Emacs, which the cache would otherwise not notice.  A configured entry in
 rereading the store cannot take a project away from the assignment
 `init.el' makes for it."
   (interactive)
-  (setq scholia--assignment-cache nil)
+  (setq scholia--state-cache nil)
   (scholia-stored-assignments))
 
 (defun scholia-session-assign-project (name &optional root)
@@ -238,12 +243,12 @@ answers to the name every buffer then annotates into."
   (when (equal (scholia-session-default-name) old)
     (set-default 'scholia-session new))
   (set-default
-   'scholia-active-sessions
+   'scholia-visible-sessions
    (delete-dups
     (delq nil
           (mapcar (lambda (session)
                     (if (equal session old) new session))
-                  scholia-active-sessions))))
+                  scholia-visible-sessions))))
   (scholia-session--rebind-buffers old new)
   (scholia-session--map-assignments
    (lambda (entry)
@@ -265,55 +270,117 @@ header into it rather than reporting a session nothing can open."
       (scholia-db-session-file-p file)
     (error t)))
 
-(defun scholia-session-activate (name)
-  "Show session NAME in every annotated buffer."
-  (interactive (list (scholia-session--read-name "Activate session: ")))
+(defun scholia-session--remember-visibility ()
+  "Write what is shown and what is annotated into, when that is kept.
+Nothing is written while `scholia-persist-visibility' is nil, so the file
+a setup that does not want this keeps holds its assignments alone."
+  (when scholia-persist-visibility
+    (scholia-session--write-state
+     (plist-put (plist-put (copy-sequence (scholia-stored-state))
+                           :visible (copy-sequence scholia-visible-sessions))
+                :session (default-value 'scholia-session)))))
+
+(defun scholia-session-restore-visibility ()
+  "Draw the sessions `scholia-session-state-file' was last left showing.
+Returns the sessions it restored, or nil when it restored none.  Only a
+session that still has a file is restored, so one deleted between
+sittings does not come back as a name nothing answers to."
+  (interactive)
+  (when scholia-persist-visibility
+    (let* ((state (scholia-stored-state))
+           (target (plist-get state :session))
+           (visible (seq-filter (lambda (name)
+                                  (and (scholia-session-name-p name)
+                                       (file-exists-p
+                                        (scholia-session-file name))))
+                                (plist-get state :visible))))
+      (when (and target
+                 (scholia-session-name-p target)
+                 (file-exists-p (scholia-session-file target)))
+        (set-default 'scholia-session target))
+      (set-default 'scholia-visible-sessions visible)
+      visible)))
+
+(defun scholia-session--set-visible (names)
+  "Show exactly the sessions NAMES, storing and redrawing what moved."
+  (unless (equal names scholia-visible-sessions)
+    (let ((buffers (scholia-session--all-buffers)))
+      (scholia-session--save-buffers buffers)
+      (set-default 'scholia-visible-sessions names)
+      (scholia-session--remember-visibility)
+      (scholia-session--redraw-buffers buffers))))
+
+(defun scholia-session-shown-p (name)
+  "Return non-nil when session NAME is drawn in annotated buffers.
+The target is drawn whether or not it is listed, since a buffer would
+otherwise annotate into a session it does not show."
+  (or (member name scholia-visible-sessions)
+      (equal name (scholia-session-default-name))
+      nil))
+
+(defun scholia-session-show (name)
+  "Draw session NAME alongside the target, without making it the target."
+  (interactive (list (scholia-session--read-name "Show session: ")))
   (scholia-session--check-name name)
   (scholia-session--existing-file name)
-  (unless (member name scholia-active-sessions)
-    (let ((buffers (scholia-session--all-buffers)))
-      (scholia-session--save-buffers buffers)
-      (set-default 'scholia-active-sessions
-                   (append scholia-active-sessions (list name)))
-      (scholia-session--redraw-buffers buffers)))
+  (unless (member name scholia-visible-sessions)
+    (scholia-session--set-visible
+     (append scholia-visible-sessions (list name))))
   name)
 
-(defun scholia-session-deactivate (name)
-  "Stop showing session NAME in annotated buffers."
+(defun scholia-session-hide (name)
+  "Stop drawing session NAME, which cannot be the target.
+Hiding the target would leave a buffer annotating into a session it does
+not show, so switching away from it comes first."
   (interactive
-   (list (completing-read "Deactivate session: "
-                          scholia-active-sessions nil t)))
-  (when (member name scholia-active-sessions)
-    (let ((buffers (scholia-session--all-buffers)))
-      (scholia-session--save-buffers buffers)
-      (set-default 'scholia-active-sessions
-                   (delete name (copy-sequence scholia-active-sessions)))
-      (scholia-session--redraw-buffers buffers)))
+   (list (completing-read "Hide session: " scholia-visible-sessions nil t)))
+  (when (equal name (scholia-session-default-name))
+    (scholia-session--refuse
+     "%s is the session being annotated into: switch away from it first"
+     name))
+  (when (member name scholia-visible-sessions)
+    (scholia-session--set-visible
+     (delete name (copy-sequence scholia-visible-sessions))))
   name)
+
+(defun scholia-session-toggle (name)
+  "Draw session NAME when it is hidden and hide it when it is drawn."
+  (interactive (list (scholia-session--read-name "Toggle session: ")))
+  (if (member name scholia-visible-sessions)
+      (scholia-session-hide name)
+    (scholia-session-show name)))
 
 (defun scholia-session-create (name)
-  "Make and activate an empty session called NAME."
+  "Make an empty session called NAME and switch to it.
+The session annotated into until now is stored and stops being drawn,
+since switching is what this does; `scholia-session-show' draws it again
+beside the new one."
   (interactive (list (read-string "New session: ")))
   (scholia-session--check-name name)
   (let ((file (scholia-session-file name)))
     (when (scholia-session--taken-p file)
       (scholia-session--refuse "A session called %s already exists" name))
     (scholia-db-create-session file)
-    (set-default 'scholia-session name)
-    (scholia-session-activate name)))
+    (scholia-session-switch name)))
 
-(defun scholia-session-switch (name)
-  "Use NAME as the global target and keep it visible."
-  (interactive (list (scholia-session--read-name "Switch to session: ")))
+(defun scholia-session-switch (name &optional keep-shown)
+  "Annotate into NAME from now on, and draw it alone.
+With KEEP-SHOWN, a prefix argument interactively, the sessions drawn
+until now stay drawn beside it, the one switched away from among them."
+  (interactive (list (scholia-session--read-name "Switch to session: ")
+                     current-prefix-arg))
   (scholia-session--check-name name)
   (scholia-session--existing-file name)
-  (let* ((old (scholia-session-default-name))
-         (buffers (scholia-session--all-buffers)))
+  (let ((buffers (scholia-session--all-buffers))
+        (old (scholia-session-default-name)))
     (scholia-session--save-buffers buffers)
     (set-default 'scholia-session name)
-    (set-default 'scholia-active-sessions
-                 (delete-dups
-                  (append scholia-active-sessions (list old name))))
+    (set-default 'scholia-visible-sessions
+                 (when keep-shown
+                   (delete name
+                           (delete-dups
+                            (append scholia-visible-sessions (list old))))))
+    (scholia-session--remember-visibility)
     (scholia-session--redraw-buffers buffers))
   (run-hooks 'scholia-session-switch-hook)
   name)
@@ -337,10 +404,10 @@ them orphaned at a name nothing answers to."
          (target (scholia-session-file new))
          (header (plist-get (scholia-db-interchange source) :session))
          (default (default-value 'scholia-session))
-         (active (copy-sequence scholia-active-sessions))
+         (active (copy-sequence scholia-visible-sessions))
          (bindings (scholia-session--bindings))
          (projects (copy-tree (default-value 'scholia-project-sessions)))
-         (cache (copy-tree scholia--assignment-cache))
+         (cache (copy-tree scholia--state-cache))
          (moved nil))
     (when (file-exists-p target)
       (scholia-session--refuse "A session called %s already exists" new))
@@ -359,10 +426,10 @@ them orphaned at a name nothing answers to."
            (scholia-store-rename target source)
            (scholia-session--restore-header source header))
          (set-default 'scholia-session default)
-         (set-default 'scholia-active-sessions active)
+         (set-default 'scholia-visible-sessions active)
          (scholia-session--restore-bindings bindings)
          (set-default 'scholia-project-sessions projects)
-         (setq scholia--assignment-cache cache)
+         (setq scholia--state-cache cache)
          (ignore-errors (scholia-session--redraw-buffers affected))
          (signal (car failure) (cdr failure)))))))
 
@@ -381,14 +448,14 @@ them for the next session of the same name to open."
                      current-prefix-arg))
   (scholia-session--check-name name)
   (let* ((file (scholia-session--existing-file name))
-         (active (member name scholia-active-sessions))
+         (shown (member name scholia-visible-sessions))
          (affected (scholia-session--buffers-of (list name)))
-         (redraw (if active (scholia-session--all-buffers) affected)))
+         (redraw (if shown (scholia-session--all-buffers) affected)))
     (when (and (not force) affected)
       (scholia-session--refuse "Buffers still annotate into %s" name))
     (scholia-store-delete file)
     (scholia-session--rebind name nil)
-    (when active (scholia-session--redraw-buffers redraw))
+    (when redraw (scholia-session--redraw-buffers redraw))
     name))
 
 (defun scholia-session-export (name file)

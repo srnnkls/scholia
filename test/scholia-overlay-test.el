@@ -109,29 +109,22 @@ its terminator 23, line three 24-35 and its terminator 36.")
 
 ;;;; Face and priority assignment
 
-(ert-deftest scholia-overlay-cycles-paired-faces-and-assigns-a-uniform-priority ()
+(ert-deftest scholia-overlay-draws-every-chain-of-a-session-in-one-colour ()
   (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
     (scholia-mode 1)
     (let* ((chains (mapcar (lambda (region)
                              (scholia-create-chain (car region) (cdr region) "note"))
                            '((1 . 6) (7 . 11) (12 . 18) (19 . 30))))
-           (indices (mapcar (lambda (chain)
-                              (seq-position scholia-highlight-faces
-                                            (overlay-get (car chain) 'face)))
-                            chains))
+           (expected (scholia-color-highlight-face (scholia-color-for-index 0)))
            (priorities (mapcar (lambda (overlay) (overlay-get overlay 'priority))
                                (apply #'append chains))))
       (should (equal (length (nth 3 chains)) 2))
-      (should (seq-every-p #'integerp indices))
-      (should (equal (cdr indices)
-                     (mapcar (lambda (index)
-                               (mod (1+ index) (length scholia-highlight-faces)))
-                             (butlast indices))))
       (should (seq-every-p #'integerp priorities))
       (should (seq-every-p (lambda (priority) (> priority 0)) priorities))
       (dolist (chain chains)
+        (should (equal (overlay-get (car chain) 'face) expected))
         (should (equal (scholia-overlay-test--faces chain)
-                       (make-list (length chain) (overlay-get (car chain) 'face))))
+                       (make-list (length chain) expected)))
         (should (equal (mapcar (lambda (overlay) (overlay-get overlay 'priority))
                                chain)
                        (make-list (length chain)
@@ -139,8 +132,63 @@ its terminator 23, line three 24-35 and its terminator 36.")
   (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
     (scholia-mode 1)
     (let ((chain (scholia-create-chain 1 6 "restored" 1)))
+      (should (equal (scholia-chain-color-index chain) 1))
       (should (equal (overlay-get (car chain) 'face)
-                     (nth 1 scholia-highlight-faces))))))
+                     (scholia-color-highlight-face
+                      (scholia-color-for-index 0))))))
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (should-error (scholia-create-chain 1 6 "malformed" "not an index")
+                  :type 'wrong-type-argument)))
+
+(ert-deftest scholia-overlay-never-draws-two-sessions-in-one-colour ()
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (let ((owners '("one" "two" "three" "four")))
+      (setq scholia--session-state
+            (seq-map-indexed (lambda (owner index)
+                               (list owner :color-offset index))
+                             owners))
+      (let ((faces (seq-map-indexed
+                    (lambda (owner index)
+                      (overlay-get
+                       (car (scholia-create-chain (+ 1 index) (+ 2 index)
+                                                  "note" 0 owner))
+                       'face))
+                    owners)))
+        (should (equal (length (delete-dups (copy-sequence faces)))
+                       (length owners)))))))
+
+(ert-deftest scholia-overlay-numbers-a-session-no-state-names-past-the-rest ()
+  "A session this buffer holds no state for still gets a colour of its own."
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (setq scholia--session-state nil)
+    (let ((faces (mapcar (pcase-lambda (`(,beg ,end ,owner))
+                           (overlay-get
+                            (car (scholia-create-chain beg end "note" 0 owner))
+                            'face))
+                         '((1 6 "ghost-a")
+                           (7 11 "ghost-b")
+                           (12 18 "ghost-c")))))
+      (should (equal (length (delete-dups (copy-sequence faces))) 3)))))
+
+(ert-deftest scholia-overlay-tints-a-reply-below-the-note-it-answers ()
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (let* ((chain (scholia-create-chain 1 6 "the note"))
+           (key (overlay-get (car chain) 'scholia--chain-id))
+           (color (scholia-color-for-index 0)))
+      (setf (alist-get key scholia--replies) '((1 . "the answer")))
+      (scholia-render-chain chain)
+      (let ((rendered (scholia-render-note chain)))
+        (should (string-match-p (regexp-quote "the note") rendered))
+        (let ((start (string-match (regexp-quote "the answer") rendered)))
+          (should (integerp start))
+          (should (equal (get-text-property start 'face rendered)
+                         (scholia-color-note-face color 1)))
+          (should-not (equal (scholia-color-note-face color 1)
+                             (scholia-color-note-face color 0))))))))
 
 
 ;;;; A chain ending at point-max with no trailing newline
@@ -156,25 +204,24 @@ its terminator 23, line three 24-35 and its terminator 36.")
       (should (scholia-chain-last-p (car chain)))
       (should (equal (buffer-string) "alpha beta"))
       (should-not (buffer-modified-p))
-      (let* ((rendered (overlay-get (car chain) 'after-string))
+      (let* ((rendered (scholia-render-note chain))
              (start (and (stringp rendered)
-                         (string-match (regexp-quote "at the very end") rendered)))
-             (index (seq-position scholia-highlight-faces
-                                  (overlay-get (car chain) 'face))))
+                         (string-match (regexp-quote "at the very end") rendered))))
         (should (stringp rendered))
         (should (integerp start))
-        (should (integerp index))
         (should (equal (get-text-property start 'face rendered)
-                       (nth index scholia-annotation-text-faces))))
+                       (scholia-color-note-face (scholia-color-for-index 0) 0))))
       (goto-char (point-max))
       (insert "x")
-      (should-not (overlay-get (car (scholia-chain-at 8)) 'after-string))))
+      (should (string-match-p (regexp-quote "at the very end")
+                              (scholia-render-note (scholia-chain-at 8))))))
   (scholia-test-with-temp-file-buffer _buffer "alpha beta\n"
     (scholia-mode 1)
-    (should-not (overlay-get (car (scholia-create-chain 7 11 "the note"))
-                             'after-string))
+    (should (string-match-p (regexp-quote "the note")
+                            (scholia-render-note
+                             (scholia-create-chain 7 11 "the note"))))
     (delete-region 11 12)
-    (let ((rendered (overlay-get (car (scholia-chain-at 8)) 'after-string)))
+    (let ((rendered (scholia-render-note (scholia-chain-at 8))))
       (should (stringp rendered))
       (should (string-match-p (regexp-quote "the note") rendered)))))
 
@@ -251,9 +298,8 @@ its terminator 23, line three 24-35 and its terminator 36.")
         (narrow-to-region 12 30)
         (goto-char 18)
         (insert "x"))
-      (should-not (seq-some (lambda (overlay)
-                              (overlay-get overlay 'after-string))
-                            (scholia-chain-at 8)))
+      (should (string-match-p (regexp-quote "narrowed lookup")
+                              (scholia-render-note (scholia-chain-at 8))))
       (save-restriction
         (narrow-to-region 12 (point-max))
         (scholia-delete-chain (scholia-annotation-at 15)))
@@ -287,7 +333,19 @@ its terminator 23, line three 24-35 and its terminator 36.")
       (should-not (seq-filter #'scholia-annotation-p
                               (overlays-in (point-min) (point-max))))
       (should (seq-every-p (lambda (overlay) (null (overlay-buffer overlay)))
-                           chain)))))
+                           chain))
+      (should-not (scholia-render--notes)))))
+
+(ert-deftest scholia-overlay-deleting-a-chain-takes-its-note-with-it ()
+  (scholia-test-with-temp-file-buffer _buffer "alpha beta\ngamma delta\n"
+    (scholia-mode 1)
+    (let ((kept (scholia-create-chain 1 6 "kept"))
+          (going (scholia-create-chain 7 11 "going")))
+      (should (equal (length (scholia-render--notes)) 2))
+      (scholia-delete-chain (car going))
+      (should (equal (length (scholia-render--notes)) 1))
+      (should (string-match-p (regexp-quote "kept")
+                              (scholia-render-note kept))))))
 
 
 ;;;; Two annotations that touch
