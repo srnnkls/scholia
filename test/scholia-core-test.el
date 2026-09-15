@@ -162,6 +162,21 @@ its terminator at 37.")
                         (scholia-core-test--stored (scholia-session-file) file))
                        '("kept")))))))
 
+(ert-deftest scholia-core-deleting-an-annotation-removes-the-note-drawn-for-it ()
+  "A deleted annotation leaves no note behind.
+The note is its own overlay, found by chain id rather than reached
+through the chain, so deleting the chain alone leaves the space it draws
+still taken in the buffer."
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer scholia-core-test--source
+      (setq-local scholia-session "note-delete")
+      (scholia-mode 1)
+      (goto-char 1)
+      (scholia-annotate "a note drawn beside the annotation")
+      (should (= 1 (length (scholia-render--notes))))
+      (scholia-delete-annotation)
+      (should (= 0 (length (scholia-render--notes)))))))
+
 (ert-deftest scholia-core-replies-point-at-the-annotation-they-answer ()
   (scholia-test-with-session-directory
     (scholia-test-with-temp-file-buffer buffer scholia-core-test--source

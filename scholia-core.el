@@ -746,10 +746,12 @@ editor stores annotations after accepting input and removing its field."
         (cdr (assoc-string selected candidates)))))))
 
 (defun scholia-delete-annotation ()
-  "Delete the selected annotation at point."
+  "Delete the selected annotation at point and the note drawn for it."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
-      (mapc #'delete-overlay chain)
+      (progn
+        (scholia-render-forget (overlay-get (car chain) 'scholia--chain-id))
+        (mapc #'delete-overlay chain))
     (scholia-core--report "No annotation at point")))
 
 (defun scholia-edit-annotation (&optional text)
