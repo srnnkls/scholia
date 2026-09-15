@@ -133,10 +133,17 @@ ordinary filename completion relative to the source's current directory."
     (push overlay (scholia-edit--session-overlays session))
     overlay))
 
-(defun scholia-edit--prefix (part)
-  "Return PART of the bracket beside the source and annotation text."
-  (propertize (pcase part ('start "╭ ") ('end "╰ ") (_ "│ "))
-              'face 'scholia-edit-border))
+(defconst scholia-edit--bracket-first
+  (propertize "╭ " 'face 'scholia-edit-border)
+  "Bracket opening the first line of an annotation's source.")
+
+(defconst scholia-edit--bracket-middle
+  (propertize "│ " 'face 'scholia-edit-border)
+  "Bracket opening a line an annotation continues.")
+
+(defconst scholia-edit--bracket-last
+  (propertize "╰ " 'face 'scholia-edit-border)
+  "Bracket opening the last line of the annotation input.")
 
 (defun scholia-edit--draw ()
   "Refresh the source bracket and the active input's block face."
@@ -157,10 +164,11 @@ ordinary filename completion relative to the source's current directory."
                   (wrap (get-char-property (point) 'wrap-prefix)))
               (scholia-edit--overlay
                session (point) next
-               'line-prefix (concat (scholia-edit--prefix
-                                     (if (= (point) origin) 'start 'middle))
+               'line-prefix (concat (if (= (point) origin)
+                                        scholia-edit--bracket-first
+                                      scholia-edit--bracket-middle)
                                     prefix)
-               'wrap-prefix (concat (scholia-edit--prefix 'middle) wrap))
+               'wrap-prefix (concat scholia-edit--bracket-middle wrap))
               (goto-char next)))
           (when scholia-edit--source
             (goto-char (car scholia-edit--source))
@@ -171,14 +179,19 @@ ordinary filename completion relative to the source's current directory."
                                          'face 'scholia-edit-source))
                 (goto-char (min (cdr scholia-edit--source) (1+ eol))))))
           (goto-char begin)
-          (while (<= (point) end)
-            (let ((eol (min end (line-end-position))))
+          (let ((last-line (save-excursion (goto-char end)
+                                           (line-beginning-position))))
+            (when (> last-line begin)
               (scholia-edit--overlay
-               session (point) (1+ eol)
+               session begin last-line
                'face body
-               'line-prefix (scholia-edit--prefix (if (= eol end) 'end 'middle))
-               'wrap-prefix (scholia-edit--prefix 'middle))
-              (goto-char (1+ eol)))))
+               'line-prefix scholia-edit--bracket-middle
+               'wrap-prefix scholia-edit--bracket-middle))
+            (scholia-edit--overlay
+             session last-line (1+ end)
+             'face body
+             'line-prefix scholia-edit--bracket-last
+             'wrap-prefix scholia-edit--bracket-middle)))
         (setf (scholia-edit--session-spacer session)
               (scholia-edit--overlay session end (1+ end) 'after-string space))))))
 

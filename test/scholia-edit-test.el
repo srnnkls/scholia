@@ -58,6 +58,37 @@
                  collect (cons (overlay-start overlay) (overlay-end overlay)))
         (lambda (a b) (< (car a) (car b)))))
 
+(defun scholia-edit-test--draw-allocations ()
+  "Return how many overlays one redraw of the active field allocates."
+  (let ((calls 0)
+        (original (symbol-function 'make-overlay)))
+    (cl-letf (((symbol-function 'make-overlay)
+               (lambda (&rest arguments)
+                 (setq calls (1+ calls))
+                 (apply original arguments))))
+      (scholia-edit--draw))
+    calls))
+
+(ert-deftest scholia-edit-redraw-allocation-is-independent-of-field-length ()
+  "A redraw allocates no more overlays for a long field than a short one.
+Every line of the field is bracketed the same way but its last, so the
+decoration is bounded whatever the note runs to, and a keystroke in a
+long note costs what a keystroke in a short one does."
+  (let ((allocations nil))
+    (dolist (lines '(2 20))
+      (with-temp-buffer
+        (insert "alpha\nbravo\n")
+        (goto-char 1)
+        (let ((calls 0))
+          (scholia-edit-test--reading
+              (lambda ()
+                (dotimes (_ lines) (insert "word word word\n"))
+                (setq calls (scholia-edit-test--draw-allocations))
+                (scholia-edit-cancel))
+            (condition-case nil (scholia-edit-read nil "") (quit nil)))
+          (push calls allocations))))
+    (should (= (nth 0 allocations) (nth 1 allocations)))))
+
 (ert-deftest scholia-edit-previews-exact-selection-from-its-first-line ()
   "Partial words and multiline selections are previewed before any input."
   (dolist (fixture '(("before words after\nnext\n" (8 . 13)
