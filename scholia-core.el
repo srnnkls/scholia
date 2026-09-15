@@ -665,21 +665,6 @@ only once no annotated buffer is left to need it."
   (when scholia-use-messages
     (apply #'message format arguments)))
 
-(defun scholia-core--bounds ()
-  "Return the range to annotate as a cons, or nil when there is none.
-The region answers while it is active and the symbol at point otherwise."
-  (if (use-region-p)
-      (cons (region-beginning) (region-end))
-    (bounds-of-thing-at-point 'symbol)))
-
-(defun scholia-core--annotated-range-p (beg end owner)
-  "Return non-nil when OWNER has an annotation reaching BEG to END."
-  (seq-find
-   (lambda (overlay)
-     (and (scholia-annotation-p overlay)
-          (equal (overlay-get overlay 'scholia--owner) owner)))
-   (overlays-in beg end)))
-
 (defun scholia-core--read-owner (prompt &optional alternate)
   "Read a session owner using PROMPT.
 When ALTERNATE is non-nil, omit the current write target."
@@ -690,38 +675,53 @@ When ALTERNATE is non-nil, omit the current write target."
     (unless sessions (user-error "No alternate session is active"))
     (completing-read prompt sessions nil t)))
 
+(defun scholia-core--annotate-range (bounds text owner)
+  "Annotate BOUNDS with TEXT for OWNER.
+BOUNDS is a cons of positions.  Without TEXT the note is read through
+`scholia-annotation-editor'.  Report rather than signal when BOUNDS
+holds no text on any line, or when the note read is empty."
+  (cond
+   ((not (scholia-overlay--line-segments (car bounds) (cdr bounds)))
+    (scholia-core--report "Nothing to annotate: no text on any line here"))
+   (t
+    (let ((note (or text
+                    (progn
+                      (require 'scholia-ui)
+                      (scholia-ui-read-annotation nil bounds)))))
+      (cond
+       ((string= note "")
+        (scholia-core--report "Annotation text is empty"))
+       (t
+        (scholia-core--session-state owner)
+        (scholia-create-chain (car bounds) (cdr bounds) note nil owner)
+        (deactivate-mark)
+        (when (and (not text) (eq scholia-annotation-editor 'inline))
+          (scholia-save-annotations))))))))
+
 (defun scholia-annotate (&optional text owner)
-  "Annotate the active region or symbol with TEXT for OWNER.
+  "Annotate the region, or the symbol at point, with TEXT for OWNER.
 OWNER defaults to the buffer's resolved write target.  Interactively, a
 prefix selects another effective session.
+
+An active region makes a new annotation, overlapping whatever is already
+there.  With no region, an annotation at point is edited instead, and
+anything else annotates the symbol at point.  Nothing here signals: what
+cannot be annotated is reported.
+
 `scholia-annotation-editor' selects the input interface.  The inline
 editor stores annotations after accepting input and removing its field."
   (interactive
    (list nil (and current-prefix-arg
                   (scholia-core--read-owner "Annotate in session: " t))))
-  (let ((bounds (scholia-core--bounds))
-        (owner (or owner (scholia-session-name))))
+  (let* ((region (and (use-region-p)
+                      (cons (region-beginning) (region-end))))
+         (symbol (and (not region) (bounds-of-thing-at-point 'symbol)))
+         (owner (or owner (scholia-session-name))))
     (cond
-     ((not bounds)
-      (scholia-core--report "Nothing to annotate at point"))
-     ((not (scholia-overlay--line-segments (car bounds) (cdr bounds)))
-      (scholia-core--report "Nothing to annotate: no text on any line here"))
-     ((scholia-core--annotated-range-p (car bounds) (cdr bounds) owner)
-      (scholia-core--report "Annotations can not overlap: %s is annotated"
-                            (buffer-substring-no-properties (car bounds)
-                                                            (cdr bounds))))
-     (t
-      (let ((note (or text
-                      (progn
-                        (require 'scholia-ui)
-                        (scholia-ui-read-annotation nil bounds)))))
-        (if (string= note "")
-            (scholia-core--report "Annotation text is empty")
-          (scholia-core--session-state owner)
-          (scholia-create-chain (car bounds) (cdr bounds) note nil owner)
-          (deactivate-mark)
-          (when (and (not text) (eq scholia-annotation-editor 'inline))
-            (scholia-save-annotations))))))))
+     (region (scholia-core--annotate-range region text owner))
+     ((scholia-chains-at) (scholia-edit-annotation text))
+     (symbol (scholia-core--annotate-range symbol text owner))
+     (t (scholia-core--report "Nothing to annotate at point")))))
 
 (defun scholia-core--chain-candidate (chain)
   "Return the completion candidate identifying CHAIN."

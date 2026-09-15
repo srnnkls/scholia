@@ -20,6 +20,8 @@
 (eval-and-compile
   (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
+  (require 'scholia-overlay nil t)
+  (require 'scholia-render nil t)
   (require 'scholia-core nil t))
 
 (defconst scholia-core-test--source
@@ -106,17 +108,19 @@ its terminator at 37.")
                         (goto-char 19)
                         (scholia-annotate ""))))
         (should (string-match-p "empty" reported)))
-      (let ((reported (scholia-core-test--reported
-                        (goto-char 13)
-                        (scholia-annotate "over the symbol again"))))
-        (should (string-match-p "overlap" reported)))
-      (let ((reported (scholia-core-test--reported
-                        (goto-char 11)
-                        (set-mark 1)
-                        (activate-mark)
-                        (scholia-annotate "over a region already annotated"))))
-        (deactivate-mark)
-        (should (string-match-p "overlap" reported)))
+      (goto-char 13)
+      (scholia-annotate "over the symbol again")
+      (should (equal (sort (mapcar #'scholia-core-test--chain-text
+                                   (scholia-buffer-chains))
+                           #'string<)
+                     '("on the last symbol" "on the region"
+                       "over the symbol again")))
+      (goto-char 11)
+      (set-mark 1)
+      (activate-mark)
+      (scholia-annotate "over a region already annotated")
+      (deactivate-mark)
+      (should (= 4 (length (scholia-buffer-chains))))
       (let ((reported (scholia-core-test--reported
                         (goto-char 25)
                         (set-mark 24)
@@ -124,10 +128,10 @@ its terminator at 37.")
                         (scholia-annotate "on nothing but a line break"))))
         (deactivate-mark)
         (should (string-match-p "no text" reported)))
-      (should (equal (mapcar #'length (scholia-buffer-chains)) '(1 1 1)))
+      (should (equal (mapcar #'length (scholia-buffer-chains)) '(1 1 1 1)))
       (goto-char 19)
       (scholia-annotate "on delta")
-      (should (equal (scholia-chain-color-index (scholia-chain-at 19)) 3)))))
+      (should (equal (scholia-chain-color-index (scholia-chain-at 19)) 4)))))
 
 (ert-deftest scholia-core-deletes-the-whole-chain-at-point ()
   (scholia-test-with-session-directory
@@ -176,6 +180,50 @@ still taken in the buffer."
       (should (= 1 (length (scholia-render--notes))))
       (scholia-delete-annotation)
       (should (= 0 (length (scholia-render--notes)))))))
+
+(defun scholia-core-test--notes ()
+  "Return the notes the buffer's chains carry."
+  (mapcar (lambda (chain)
+            (overlay-get (car chain) 'scholia-annotation))
+          (scholia-buffer-chains)))
+
+(ert-deftest scholia-core-annotate-edits-the-annotation-point-stands-on ()
+  "With no region, annotating over an annotation replaces its note.
+Nothing is added, so the buffer still holds one annotation."
+  (with-temp-buffer
+    (insert "alpha beta gamma\n")
+    (goto-char 1)
+    (let ((scholia-project-root-function (lambda () nil)))
+      (scholia-annotate "first note")
+      (should (equal (scholia-core-test--notes) '("first note")))
+      (goto-char 3)
+      (scholia-annotate "second note")
+      (should (equal (scholia-core-test--notes) '("second note"))))))
+
+(ert-deftest scholia-core-annotate-of-a-subregion-makes-a-second-annotation ()
+  "A selected region annotates whether or not it overlaps one already."
+  (with-temp-buffer
+    (insert "alpha beta gamma\n")
+    (goto-char 1)
+    (let ((scholia-project-root-function (lambda () nil))
+          (transient-mark-mode t))
+      (scholia-annotate "the whole word")
+      (goto-char 1)
+      (set-mark 4)
+      (setq mark-active t)
+      (scholia-annotate "the first part of it")
+      (should (equal (sort (scholia-core-test--notes) #'string<)
+                     '("the first part of it" "the whole word")))
+      (should (= 2 (length (scholia-buffer-chains)))))))
+
+(ert-deftest scholia-core-annotate-reports-instead-of-signalling ()
+  "Annotating nowhere reports and returns, leaving the buffer alone."
+  (with-temp-buffer
+    (goto-char (point-min))
+    (let ((scholia-project-root-function (lambda () nil))
+          (scholia-use-messages nil))
+      (should-not (scholia-annotate "nowhere"))
+      (should-not (scholia-buffer-chains)))))
 
 (ert-deftest scholia-core-replies-point-at-the-annotation-they-answer ()
   (scholia-test-with-session-directory
