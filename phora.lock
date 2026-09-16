@@ -1,0 +1,9 @@
+version = 1
+
+[[sources]]
+name = "annotate.el"
+git = "https://github.com/bastibe/annotate.el.git"
+resolved = "default"
+commit = "347525024f319ab50735ef324e8900aecda3724c"
+digest = "blake3:c7a0bd1ef02214a2d60d7da533e498efb5047372fee3da02831d490a2f88f329"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"

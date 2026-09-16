@@ -1,0 +1,9 @@
+version = 1
+
+[sources."annotate.el"]
+git = "https://github.com/bastibe/annotate.el.git"
+
+[targets."resources/annotate.el"]
+path = "./resources/annotate.el"
+layout = "flat"
+sources = ["annotate.el"]
