@@ -6,6 +6,8 @@
 (require 'scholia-test-helper)
 (require 'scholia-forge)
 
+(defvar forge-buffer-topic)
+
 (defvar scholia-forge-test--posts nil
   "Requests the stubbed `gh' was asked to post, as endpoints and payloads.")
 
@@ -42,7 +44,10 @@ b.txt has a line added."
   "Return what GitHub answers for the pull request REPO's branches make."
   (let ((head (scholia-forge-test--git repo "rev-parse" "head"))
         (base (scholia-forge-test--git repo "rev-parse" "base")))
-    `((:pull . (:head (:sha ,head) :base (:sha ,base) :user (:login "alice")
+    `((:pull . (:head (:sha ,head :ref "feature") :base (:sha ,base :ref "main")
+                      :user (:login "alice") :state "open"
+                      :labels ((:name "bug") (:name "ui"))
+                      :requested_reviewers ((:login "carol"))
                       :body "The description" :created_at "2026-09-01T10:00:00Z"))
       (:comments
        . ((:id 1 :path "a.txt" :line 3 :side "RIGHT" :subject_type "line"
@@ -305,6 +310,27 @@ b.txt has a line added."
   (unload-feature 'scholia-forge t)
   (should-not (memq 'scholia-forge--refresh-hook magit-refresh-buffer-hook))
   (require 'scholia-forge))
+
+(ert-deftest scholia-forge-heads-the-conversation-with-how-the-pull-request-stands ()
+  (scholia-forge-test--with-pull
+    (let ((conversation (car (scholia-forge-test--chains 'conversation))))
+      (should (equal (overlay-get (car conversation) 'scholia-annotation)
+                     (concat "open · alice · main ← feature · bug, ui · review: carol\n"
+                             "The description"))))
+    (should (equal (scholia-forge--summary '(:state "closed" :merged_at "x"
+                                                    :user (:login "a")
+                                                    :base (:ref "b") :head (:ref "h")))
+                   "merged · a · b ← h"))))
+
+(ert-deftest scholia-forge-keeps-telling-forge-which-pull-request-it-shows ()
+  (scholia-forge-test--with-pull
+    (should-not (local-variable-p 'forge-buffer-topic))
+    (scholia-forge--put :topic 'the-topic)
+    (magit-refresh)
+    (should (eq forge-buffer-topic 'the-topic))
+    (magit-diff-setup-buffer "base...head" nil nil nil 'committed t)
+    (should (local-variable-p 'forge-buffer-topic))
+    (should (eq forge-buffer-topic 'the-topic))))
 
 (provide 'scholia-forge-test)
 ;;; scholia-forge-test.el ends here

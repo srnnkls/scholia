@@ -34,6 +34,10 @@
 (declare-function forge--pullreq-range "ext:forge-pullreq"
                   (pullreq &optional endpoints))
 (declare-function forge-get-repository "ext:forge-repo" (&rest args))
+(declare-function forge-visit-topic "ext:forge-commands" (topic))
+
+(defvar forge-buffer-topic)
+(defvar forge-buffer-repository)
 
 
 ;;;; Customization
@@ -244,6 +248,27 @@ the parsed answer; without one it waits, and signals
   "Return what kind of draft ANNOTATION is."
   (plist-get (plist-get annotation :forge) :kind))
 
+(defun scholia-forge--summary (pull)
+  "Return the line saying how PULL stands: state, author, branches and so on."
+  (string-join
+   (delq nil
+         (list (cond ((plist-get pull :merged_at) "merged")
+                     ((plist-get pull :draft) (format "draft, %s" (plist-get pull :state)))
+                     (t (plist-get pull :state)))
+               (plist-get (plist-get pull :user) :login)
+               (format "%s ← %s" (plist-get (plist-get pull :base) :ref)
+                       (plist-get (plist-get pull :head) :ref))
+               (when-let* ((labels (plist-get pull :labels)))
+                 (mapconcat (lambda (label) (plist-get label :name)) labels ", "))
+               (when-let* ((reviewers (append (plist-get pull :requested_reviewers)
+                                              (plist-get pull :requested_teams))))
+                 (concat "review: "
+                         (mapconcat (lambda (reviewer)
+                                      (or (plist-get reviewer :login)
+                                          (plist-get reviewer :slug)))
+                                    reviewers ", ")))))
+   " · "))
+
 (defun scholia-forge--conversation ()
   "Return the conversation of the pull request as a root and its replies.
 The root is the pull request's description; issue comments, the bodies
@@ -253,7 +278,8 @@ they were written, the drafts last."
          (author (plist-get (plist-get pull :user) :login))
          (root (list :id "gh:pr"
                      :text (let ((body (scholia-forge--text (plist-get pull :body))))
-                             (if (string-empty-p body) "(no description)" body))
+                             (concat (scholia-forge--summary pull) "\n"
+                                     (if (string-empty-p body) "(no description)" body)))
                      :author (scholia-forge--byline author (plist-get pull :created_at))
                      :login author))
          (comments
@@ -599,7 +625,15 @@ longer has is outdated, and nil."
   "Draw the threads again after Magit has drawn a pull request's diff anew."
   (when (and (bound-and-true-p scholia-forge-mode)
              (derived-mode-p 'magit-diff-mode))
+    (scholia-forge--claim-topic)
     (scholia-forge--decorate)))
+
+(defun scholia-forge--claim-topic ()
+  "Tell forge which pull request this buffer shows, when forge opened it.
+Setting the buffer up again kills `forge-buffer-topic', so it is set
+again after every refresh from the state that survives."
+  (when-let* ((topic (scholia-forge--get :topic)))
+    (setq-local forge-buffer-topic topic)))
 
 
 ;;;; The mode
@@ -616,7 +650,8 @@ longer has is outdated, and nil."
   "C-c C-d" #'scholia-forge-delete
   "C-c C-g" #'scholia-forge-refetch
   "C-c C-p" #'scholia-forge-push
-  "C-c C-o" #'scholia-forge-show-thread)
+  "C-c C-o" #'scholia-forge-show-thread
+  "C-c C-t" #'scholia-forge-visit-topic)
 
 (defun scholia-forge--lighter ()
   "Return the mode line lighter saying how the pull request stands."
@@ -676,12 +711,22 @@ RANGE is the revision range the diff shows."
          (range (or (forge--pullreq-range pullreq t)
                     (user-error "PR head ref not fetched; run forge-pull")))
          (repository (forge-get-repository pullreq)))
-    (scholia-forge-open (scholia-forge--slot repository 'githost)
-                        (scholia-forge--slot repository 'owner)
-                        (scholia-forge--slot repository 'name)
-                        (scholia-forge--slot pullreq 'number)
-                        range
-                        (scholia-forge--slot pullreq 'title))))
+    (with-current-buffer
+        (scholia-forge-open (scholia-forge--slot repository 'githost)
+                            (scholia-forge--slot repository 'owner)
+                            (scholia-forge--slot repository 'name)
+                            (scholia-forge--slot pullreq 'number)
+                            range
+                            (scholia-forge--slot pullreq 'title))
+      (setq-local forge-buffer-repository repository)
+      (scholia-forge--put :topic pullreq)
+      (scholia-forge--claim-topic))))
+
+(defun scholia-forge-visit-topic ()
+  "Show forge's own buffer of the pull request this diff shows."
+  (interactive)
+  (forge-visit-topic (or (scholia-forge--get :topic)
+                         (user-error "This diff was not opened through forge"))))
 
 (defun scholia-forge--slot (object slot)
   "Return SLOT of the forge OBJECT.
