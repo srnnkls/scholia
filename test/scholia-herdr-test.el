@@ -137,8 +137,8 @@
         (should (equal (alist-get 'session decorated-pane) "selected"))
         (should (equal (alist-get 'pane_id decorated-pane) "pane-1"))
         (should (equal (alist-get 'label decorated-pane) "Pane"))
-        (should (= (cl-count 'kind decorated-pane :key #'car) 1))
-        (should (= (cl-count 'session decorated-pane :key #'car) 1))))))
+        (should (= (cl-count 'kind decorated-pane :key #'car :test #'eq) 1))
+        (should (= (cl-count 'session decorated-pane :key #'car :test #'eq) 1))))))
 
 (ert-deftest scholia-herdr-send-region-renders-once-and-records-every-annotation ()
   (scholia-herdr-test--with-buffer

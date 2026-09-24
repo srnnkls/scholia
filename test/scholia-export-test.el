@@ -119,7 +119,7 @@ that file has to read as."
 Signal an ERT test failure when OUTPUT does not carry NEEDLE."
   (let ((index (string-search needle output)))
     (should index)
-    (- index (1+ (or (cl-position ?\n output :end index :from-end t) -1)))))
+    (- index (1+ (or (cl-position ?\n output :end index :from-end t :test #'eql) -1)))))
 
 (defun scholia-export-test--caret-column (output)
   "Return how far past its gutter the caret run of OUTPUT sits.
