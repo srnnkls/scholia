@@ -31,6 +31,13 @@ its terminator 23, line three 24-35 and its terminator 36.")
   "Return the buffer text OVERLAY covers."
   (buffer-substring-no-properties (overlay-start overlay) (overlay-end overlay)))
 
+(defun scholia-overlay-test--own-face (position string)
+  "Return the face STRING wears at POSITION, less the default face under it."
+  (let ((face (get-text-property position 'face string)))
+    (if (and (consp face) (consp (car face)) (keywordp (caar face)) (cdr face))
+        (car face)
+      face)))
+
 (defun scholia-overlay-test--faces (chain)
   "Return the highlight face of every overlay in CHAIN."
   (mapcar (lambda (overlay) (overlay-get overlay 'face)) chain))
@@ -227,7 +234,7 @@ rows go in further by its depth."
         (should (string-match-p (regexp-quote "the note") rendered))
         (let ((start (string-match (regexp-quote "the answer") rendered)))
           (should (integerp start))
-          (should (equal (get-text-property start 'face rendered)
+          (should (equal (scholia-overlay-test--own-face start rendered)
                          (scholia-color-note-face color 1)))
           (should-not (equal (scholia-color-note-face color 1)
                              (scholia-color-note-face color 0))))))))
@@ -251,7 +258,7 @@ rows go in further by its depth."
                          (string-match (regexp-quote "at the very end") rendered))))
         (should (stringp rendered))
         (should (integerp start))
-        (should (equal (get-text-property start 'face rendered)
+        (should (equal (scholia-overlay-test--own-face start rendered)
                        (scholia-color-note-face (scholia-color-for-index 0) 0))))
       (goto-char (point-max))
       (insert "x")
@@ -431,7 +438,7 @@ annotation reads as one thing whichever half of it is looked at."
              (note-face (lambda (chain)
                           (let* ((note (scholia-render-note chain))
                                  (at (string-match (regexp-quote "the whole") note)))
-                            (and at (get-text-property at 'face note)))))
+                            (and at (scholia-overlay-test--own-face at note)))))
              (resting (funcall note-face outer)))
         (should (equal (plist-get resting :background) (scholia-color-for-index 0)))
         (goto-char 4)
