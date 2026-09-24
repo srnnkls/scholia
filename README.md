@@ -193,10 +193,11 @@ Each comment wears its author's colour and byline; `scholia-forge-author-colors`
 logins. Comments whose line the diff no longer has are gathered in a marker on their file's heading,
 and `scholia-forge-show-thread` (`C-c C-o`) shows them with the hunk they were made on.
 
-Comments and replies written there are drafts, kept in the session `OWNER-REPO-pr-N` until
-`scholia-forge-push` (`C-c C-p`) sends them: comments on lines go in one review, submitted as a plain
-comment or, with a prefix argument, as an approval or a change request; replies and conversation
-comments follow. `scholia-annotate`, `scholia-reply-to`, `scholia-edit-annotation` and
+Comments and replies written there are drafts, typed in a cera field in a child frame on a graphic
+display, and kept in the session `OWNER-REPO-pr-N` until they are submitted. `scholia-forge-push`
+(`C-c C-p`) opens a buffer for the review's summary over an overview of the drafts; `C-c C-c` there
+submits the summary and the comments on lines as one review, as a plain comment, an approval or a
+change request, and then the replies and conversation comments; `C-c C-k` leaves the drafts. `scholia-annotate`, `scholia-reply-to`, `scholia-edit-annotation` and
 `scholia-delete-annotation` draft, reply to, edit and delete drafts there; comments already on
 GitHub are not changed. `scholia-forge-refetch` (`C-c C-g`) reads the pull request again.
 

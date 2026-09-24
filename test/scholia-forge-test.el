@@ -271,7 +271,7 @@ b.txt has a line added."
     (cl-letf (((symbol-function 'completing-read)
                (lambda (_prompt candidates &rest _) (car (cadr candidates)))))
       (scholia-forge-reply "Agreed"))
-    (scholia-forge-push)
+    (scholia-forge--submit "COMMENT" "")
     (let ((posts (reverse scholia-forge-test--posts)))
       (should (= 3 (length posts)))
       (should (string-suffix-p "/pulls/42/reviews" (car (nth 0 posts))))
@@ -290,7 +290,7 @@ b.txt has a line added."
     (scholia-forge-comment "A new remark")
     (cl-letf (((symbol-function 'scholia-forge--call)
                (lambda (&rest _) (signal 'scholia-forge-error '("HTTP 422")))))
-      (should-error (scholia-forge-push) :type 'scholia-forge-error))
+      (should-error (scholia-forge--submit "COMMENT" "") :type 'scholia-forge-error))
     (should (= 1 (length (scholia-forge--drafts))))))
 
 (ert-deftest scholia-forge-colours-each-comment-by-its-author ()
@@ -391,6 +391,30 @@ b.txt has a line added."
           (should (scholia-buffer-chains))
           (should-not (buffer-local-value 'scholia-forge-mode stray)))
       (kill-buffer stray))))
+
+(ert-deftest scholia-forge-keys-win-over-evils-magit-bindings ()
+  "In normal state the mode's keys come before the ones evil gives Magit."
+  (skip-unless (require 'evil nil t))
+  (should (evil-intercept-keymap-p scholia-forge-mode-map 'normal)))
+
+(ert-deftest scholia-forge-reviews-in-a-buffer-of-their-own ()
+  "The review buffer lists the drafts and submits them with its summary."
+  (scholia-forge-test--with-pull
+    (scholia-forge-test--goto "+added")
+    (scholia-forge-comment "A new remark")
+    (let ((origin (current-buffer)))
+      (scholia-forge-push)
+      (should (derived-mode-p 'scholia-forge-review-mode))
+      (should (string-match-p "comment on a.txt:9" (buffer-string)))
+      (goto-char (point-min))
+      (insert "Looks fine overall.")
+      (scholia-forge-review-submit "APPROVE")
+      (let ((review (cdr (car (last scholia-forge-test--posts)))))
+        (should (equal (plist-get review :event) "APPROVE"))
+        (should (equal (plist-get review :body) "Looks fine overall."))
+        (should (= 1 (length (plist-get review :comments)))))
+      (with-current-buffer origin
+        (should-not (scholia-forge--drafts))))))
 
 (provide 'scholia-forge-test)
 ;;; scholia-forge-test.el ends here

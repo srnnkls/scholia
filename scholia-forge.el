@@ -35,6 +35,9 @@
                   (pullreq &optional endpoints))
 (declare-function forge-get-repository "ext:forge-repo" (&rest args))
 (declare-function forge-visit-topic "ext:forge-commands" (topic))
+(declare-function evil-make-intercept-map "ext:evil-core"
+                  (keymap &optional state aux))
+(declare-function evil-insert-state "ext:evil-states" (&optional arg))
 
 (defvar forge-buffer-topic)
 
@@ -739,6 +742,9 @@ again after every refresh from the state that survives."
   "C-c C-o" #'scholia-forge-show-thread
   "C-c C-t" #'scholia-forge-visit-topic)
 
+(with-eval-after-load 'evil
+  (evil-make-intercept-map scholia-forge-mode-map 'normal))
+
 (defun scholia-forge--lighter ()
   "Return the mode line lighter saying how the pull request stands."
   (pcase (scholia-forge--get :status)
@@ -882,6 +888,10 @@ compiled, so its classes are unknown to the compiler."
   (or (scholia-core--select-chain)
       (user-error "No comment here")))
 
+(defun scholia-forge--chain-bounds (chain)
+  "Return the range CHAIN covers."
+  (cons (overlay-start (car chain)) (overlay-end (car (last chain)))))
+
 (defun scholia-forge--chain-kind (chain)
   "Return the kind of thread CHAIN draws."
   (get (overlay-get (car chain) 'scholia--chain-id) 'scholia-forge-kind))
@@ -910,9 +920,23 @@ compiled, so its classes are unknown to the compiler."
         (cdr (assoc choice candidates)))
     (car annotations)))
 
-(defun scholia-forge--read (prompt &optional initial)
-  "Read the text of a comment with PROMPT, starting from INITIAL."
-  (let ((text (string-trim (read-string prompt initial))))
+(defun scholia-forge--read (prompt &optional initial bounds)
+  "Read the text of a comment, starting from INITIAL.
+On a graphic display it is written in a cera field in a child frame
+under BOUNDS, the lines it is about, which leaves the diff's own text
+alone; elsewhere it is read in the minibuffer with PROMPT."
+  (let ((text (string-trim
+               (if (and (display-graphic-p) (not noninteractive)
+                        (require 'cera-frame nil t))
+                   (let ((cera-input-backend 'frame)
+                         (cera-input-prefix
+                          (scholia-edit--icon
+                           (scholia-forge-author-color (scholia-forge--get :viewer)))))
+                     (cera-read nil initial
+                                (or bounds
+                                    (cons (line-beginning-position) (line-end-position)))
+                                nil))
+                 (read-string prompt initial)))))
     (when (string-empty-p text)
       (user-error "A comment needs text"))
     text))
@@ -925,7 +949,10 @@ compiled, so its classes are unknown to the compiler."
   (interactive)
   (scholia-forge--ensure)
   (let* ((location (scholia-forge--region-location))
-         (text (or text (scholia-forge--read "Comment: ")))
+         (text (or text (scholia-forge--read
+                         "Comment: " nil
+                         (and (use-region-p)
+                              (cons (region-beginning) (region-end))))))
          (pull (scholia-forge--get :pull))
          (head (plist-get (plist-get pull :head) :sha))
          (side (plist-get location :side))
@@ -959,14 +986,14 @@ compiled, so its classes are unknown to the compiler."
     (pcase (scholia-forge--chain-kind chain)
       ('draft (user-error "Edit the draft instead; it is not on GitHub yet"))
       ('remote
-       (scholia-forge--reply-to-review root text))
+       (scholia-forge--reply-to-review root text (scholia-forge--chain-bounds chain)))
       ('outdated
        (scholia-forge--reply-to-review
         (car (scholia-forge--choose
               "Reply to: "
               (mapcar #'car (get (overlay-get (car chain) 'scholia--chain-id)
                                  'scholia-forge-threads))))
-        text))
+        text (scholia-forge--chain-bounds chain)))
       ('conversation
        (let* ((thread (car (get (overlay-get (car chain) 'scholia--chain-id)
                                 'scholia-forge-threads)))
@@ -975,7 +1002,8 @@ compiled, so its classes are unknown to the compiler."
                        (cons (car thread)
                              (seq-remove #'scholia-forge--draft-p
                                          (mapcar #'cdr (cdr thread))))))
-              (text (or text (scholia-forge--read "Reply: "))))
+              (text (or text (scholia-forge--read
+                              "Reply: " nil (scholia-forge--chain-bounds chain)))))
          (scholia-forge--draft-add
           (scholia-forge--draft
            (if (eq quoted (car thread))
@@ -984,9 +1012,9 @@ compiled, so its classes are unknown to the compiler."
            text "gh:pr")))))
     (scholia-forge--decorate)))
 
-(defun scholia-forge--reply-to-review (root text)
-  "Draft TEXT as a reply to the review thread ROOT starts."
-  (let ((text (or text (scholia-forge--read "Reply: "))))
+(defun scholia-forge--reply-to-review (root text &optional bounds)
+  "Draft TEXT as a reply to the review thread ROOT starts, drawn over BOUNDS."
+  (let ((text (or text (scholia-forge--read "Reply: " nil bounds))))
     (scholia-forge--draft-add
      (scholia-forge--draft
       (list :kind 'reply
@@ -1016,7 +1044,8 @@ compiled, so its classes are unknown to the compiler."
   (let ((draft (scholia-forge--draft-at "Edit")))
     (scholia-forge--draft-update
      (plist-get draft :id)
-     (scholia-forge--read "Comment: " (plist-get draft :text)))
+     (scholia-forge--read "Comment: " (plist-get draft :text)
+                          (scholia-forge--chain-bounds (car (scholia-chains-at)))))
     (scholia-forge--decorate)))
 
 (defun scholia-forge-delete ()
@@ -1081,17 +1110,11 @@ compiled, so its classes are unknown to the compiler."
                             :host (scholia-forge--get :host))
    (json-serialize payload)))
 
-(defun scholia-forge-push (&optional event)
+(defun scholia-forge--submit (event body)
   "Send every draft of this pull request to GitHub, then fetch it again.
-Comments on lines go in one review, submitted as EVENT, which is a plain
-comment unless asked for with a prefix argument; replies and
-conversation comments follow one by one.  A draft is dropped once GitHub
-has it, so what fails is still there to push again."
-  (interactive
-   (list (when current-prefix-arg
-           (completing-read "Submit review as: "
-                            '("COMMENT" "APPROVE" "REQUEST_CHANGES") nil t))))
-  (scholia-forge--ensure)
+Comments on lines go in one review with BODY as its summary, submitted
+as EVENT; replies and conversation comments follow one by one.  A draft
+is dropped once GitHub has it, so what fails is still there to send."
   (let* ((drafts (scholia-forge--drafts))
          (by-kind (lambda (kind)
                     (seq-filter (lambda (draft)
@@ -1100,39 +1123,120 @@ has it, so what fails is still there to push again."
          (reviews (funcall by-kind 'review))
          (replies (funcall by-kind 'reply))
          (conversation (funcall by-kind 'conversation))
-         (head (plist-get (plist-get (scholia-forge--get :pull) :head) :sha))
-         (body (when (and event (not (equal event "COMMENT")))
-                 (read-string "Review summary: "))))
-    (when (and (null drafts) (null event))
-      (user-error "No drafts to push"))
-    (when (and (seq-some (lambda (draft)
-                           (not (equal (plist-get (plist-get draft :forge) :commit)
-                                       head)))
-                         reviews)
-               (not (y-or-n-p "Some comments were drafted against an older head; push anyway? ")))
-      (user-error "Nothing pushed"))
-    (when (y-or-n-p
-           (format "Push %d comment%s, %d repl%s and %d conversation comment%s to %s/%s#%d? "
-                   (length reviews) (if (= (length reviews) 1) "" "s")
-                   (length replies) (if (= (length replies) 1) "y" "ies")
-                   (length conversation) (if (= (length conversation) 1) "" "s")
-                   (scholia-forge--get :owner) (scholia-forge--get :repo)
-                   (scholia-forge--get :number)))
-      (when (or reviews event)
-        (scholia-forge--post
-         (scholia-forge--endpoint "pulls" (scholia-forge--get :number) "reviews")
-         (scholia-forge--review-payload reviews head event body))
-        (dolist (draft reviews)
-          (scholia-forge--draft-remove (plist-get draft :id))))
-      (cl-loop for draft in (append replies conversation)
-               for request in (append (scholia-forge--reply-requests replies)
-                                      (scholia-forge--conversation-requests
-                                       conversation))
-               do (scholia-forge--post (car request) (cdr request))
-               (scholia-forge--draft-remove (plist-get draft :id)))
-      (message "Pushed to %s/%s#%d" (scholia-forge--get :owner)
-               (scholia-forge--get :repo) (scholia-forge--get :number))
-      (scholia-forge-refetch))))
+         (head (plist-get (plist-get (scholia-forge--get :pull) :head) :sha)))
+    (when (and (null drafts) (string-empty-p body) (equal event "COMMENT"))
+      (user-error "Nothing to submit"))
+    (when (or reviews (not (string-empty-p body)) (not (equal event "COMMENT")))
+      (scholia-forge--post
+       (scholia-forge--endpoint "pulls" (scholia-forge--get :number) "reviews")
+       (scholia-forge--review-payload reviews head event body))
+      (dolist (draft reviews)
+        (scholia-forge--draft-remove (plist-get draft :id))))
+    (cl-loop for draft in (append replies conversation)
+             for request in (append (scholia-forge--reply-requests replies)
+                                    (scholia-forge--conversation-requests
+                                     conversation))
+             do (scholia-forge--post (car request) (cdr request))
+             (scholia-forge--draft-remove (plist-get draft :id)))
+    (message "Submitted to %s/%s#%d" (scholia-forge--get :owner)
+             (scholia-forge--get :repo) (scholia-forge--get :number))
+    (scholia-forge-refetch)))
+
+
+;;;; Submitting a review
+
+(defvar-local scholia-forge--review-origin nil
+  "The pull request diff buffer this review is written for.")
+
+(defvar-local scholia-forge--review-end nil
+  "Marker where the summary ends and the overview of the drafts begins.")
+
+(defvar-keymap scholia-forge-review-mode-map
+  :doc "Keymap of `scholia-forge-review-mode'."
+  "C-c C-c" #'scholia-forge-review-submit
+  "C-c C-k" #'scholia-forge-review-cancel)
+
+(define-derived-mode scholia-forge-review-mode text-mode "Review"
+  "Mode of the buffer a pull request review's summary is written in.
+Submitting it sends the summary with every draft; cancelling leaves the
+drafts as they are.
+
+\{scholia-forge-review-mode-map}")
+
+(with-eval-after-load 'evil
+  (evil-make-intercept-map scholia-forge-review-mode-map 'normal))
+
+(defun scholia-forge--overview (drafts)
+  "Return the overview of DRAFTS shown under a review's summary."
+  (concat
+   (substitute-command-keys
+    "\n\\<scholia-forge-review-mode-map>\
+Write the review's summary above; it may stay empty.
+\\[scholia-forge-review-submit] submits it with the drafts below, \\[scholia-forge-review-cancel] leaves them.\n")
+   (if drafts
+       (mapconcat
+        (lambda (draft)
+          (let ((forge (plist-get draft :forge)))
+            (format "\n- %s\n    %s"
+                    (pcase (plist-get forge :kind)
+                      ('review (format "comment on %s:%s"
+                                       (plist-get forge :path)
+                                       (plist-get forge :line)))
+                      ('reply "reply")
+                      (_ "conversation comment"))
+                    (string-join (split-string (plist-get draft :text) "\n")
+                                 "\n    "))))
+        drafts "\n")
+     "\nNo drafts: the summary goes alone.")
+   "\n"))
+
+(defun scholia-forge-push ()
+  "Write a review of this pull request and submit it with every draft.
+The summary is written in a buffer of its own, over an overview of the
+drafts that go with it."
+  (interactive)
+  (scholia-forge--ensure)
+  (let ((origin (current-buffer))
+        (drafts (scholia-forge--drafts))
+        (buffer (get-buffer-create
+                 (format "*scholia-forge-review: %s/%s #%d*"
+                         (scholia-forge--get :owner) (scholia-forge--get :repo)
+                         (scholia-forge--get :number)))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (scholia-forge-review-mode)
+        (setq scholia-forge--review-origin origin)
+        (insert "\n")
+        (setq scholia-forge--review-end (copy-marker (1- (point)) t))
+        (insert (propertize (scholia-forge--overview drafts)
+                            'read-only t 'face 'shadow
+                            'front-sticky '(read-only)))
+        (goto-char (point-min))))
+    (pop-to-buffer buffer)
+    (when (fboundp 'evil-insert-state)
+      (evil-insert-state))))
+
+(defun scholia-forge-review-submit (event)
+  "Submit the review written here as EVENT, with every draft.
+EVENT is read with completion, a plain comment unless chosen otherwise."
+  (interactive
+   (list (completing-read "Submit review as (default COMMENT): "
+                          '("COMMENT" "APPROVE" "REQUEST_CHANGES")
+                          nil t nil nil "COMMENT")))
+  (let ((body (string-trim (buffer-substring-no-properties
+                            (point-min) scholia-forge--review-end)))
+        (origin scholia-forge--review-origin))
+    (unless (buffer-live-p origin)
+      (user-error "The pull request's diff buffer is gone"))
+    (with-current-buffer origin
+      (scholia-forge--submit event body))
+    (quit-window t)))
+
+(defun scholia-forge-review-cancel ()
+  "Leave the review unsubmitted; the drafts stay as they are."
+  (interactive)
+  (quit-window t))
 
 
 ;;;; A thread in full
