@@ -141,6 +141,9 @@ b.txt has a line added."
     (should (eq (scholia-forge--get :status) 'ready))
     (should (equal (scholia-forge--get :viewer) "me"))
     (should (equal (scholia-forge--get :session) "owner-repo-pr-42"))
+    (should (eq scholia-note-placement 'below))
+    (should (string-prefix-p
+             "\n" (scholia-render-note (car (scholia-forge-test--chains 'remote)))))
     (should (equal (scholia-forge--session-name "git.corp" "o w" "r/x" 7)
                    "git.corp-o-w-r-x-pr-7"))))
 
@@ -286,6 +289,12 @@ b.txt has a line added."
     (should (equal (scholia-forge-author-color "bob") (scholia-forge-author-color "bob")))
     (should-not (equal (scholia-forge-author-color "bob")
                        (scholia-forge-author-color "carol")))
+    (let ((saturation (lambda (color) (nth 1 (scholia-color--hsl color)))))
+      (should (< (funcall saturation (scholia-forge-author-color "bob"))
+                 (let ((scholia-forge-author-saturation 1.0))
+                   (funcall saturation (scholia-forge-author-color "bob")))))
+      (let ((scholia-forge-author-colors '(("bob" . "#ff0000"))))
+        (should (equal (scholia-forge-author-color "bob") "#ff0000"))))
     (let* ((chain (seq-find (lambda (chain)
                               (equal (scholia-forge-test--line chain) "+changed 3"))
                             (scholia-forge-test--chains 'remote)))

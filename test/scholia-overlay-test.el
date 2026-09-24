@@ -479,5 +479,28 @@ Without one every pane wears the session's colour, as the underline does."
                          (scholia-color-highlight-face
                           (scholia-color-on-theme "#0000ff")))))))))
 
+(ert-deftest scholia-overlay-draws-a-note-below-its-line-when-asked ()
+  "With `scholia-note-placement' below, a note starts a line of its own."
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (setq-local scholia-note-placement 'below)
+    (let ((chain (scholia-create-chain 1 6 "the note")))
+      (should (string-prefix-p "\nthe note"
+                               (substring-no-properties (scholia-render-note chain)))))))
+
+(ert-deftest scholia-overlay-wraps-a-note-at-the-note-width ()
+  "A note wraps at `scholia-note-width' however wide the window is."
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (setq-local scholia-note-placement 'below)
+    (setq-local scholia-note-width 20)
+    (let* ((chain (scholia-create-chain
+                   1 6 "a note long enough to wrap at twenty columns"))
+           (rows (split-string (substring-no-properties (scholia-render-note chain))
+                               "\n" t)))
+      (should (> (length rows) 1))
+      (dolist (row rows)
+        (should (<= (string-width row) 20))))))
+
 (provide 'scholia-overlay-test)
 ;;; scholia-overlay-test.el ends here

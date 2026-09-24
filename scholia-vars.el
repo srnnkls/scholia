@@ -235,6 +235,19 @@ it in every buffer."
   "Column where annotation text starts."
   :type 'natnum)
 
+(defcustom scholia-note-width 80
+  "Columns a note's line may take at most, its indentation included.
+A note wraps at the window's edge or here, whichever comes first, so it
+reads at the width code is written in; nil leaves it to the window."
+  :type '(choice (const :tag "The window's width" nil) natnum))
+
+(defcustom scholia-note-placement 'beside
+  "Where a note is drawn against the last line it annotates.
+`beside' draws it to the right of the line, from
+`scholia-annotation-column'; `below' draws it on lines of its own under
+the line, from the left edge."
+  :type '(choice (const beside) (const below)))
+
 (defcustom scholia-search-region-lines-delta 2
   "How many lines around its stored position annotated text is searched.
 Applies when a file changed while `scholia-mode' was off."

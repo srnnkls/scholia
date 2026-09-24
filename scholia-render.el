@@ -45,6 +45,7 @@ It carries no face, so it reads as a byline under what was written
 rather than as more of it."
   (when (and scholia-annotation-authors author)
     (cera-pane :id id :kind 'readonly :bracket nil :indent indent
+               :max-width scholia-note-width
                :text (concat (when-let* ((glyph (scholia-edit-glyph
                                                  scholia-author-icon
                                                  scholia-author-icon-fallback)))
@@ -64,6 +65,7 @@ and each of them is followed by a pane naming its author while
     (delq nil
           (append
            (list (cera-pane :id chain-id :kind 'readonly :bracket nil
+                            :max-width scholia-note-width
                             :face (scholia-color-note-face color 0)
                             :text (concat (overlay-get head 'scholia-annotation)
                                           (and revision (format " [%s]" revision))))
@@ -75,6 +77,7 @@ and each of them is followed by a pane naming its author while
              (pcase-lambda (`(,depth . ,reply) index)
                (let ((indent (* depth scholia-render-reply-indent)))
                  (list (cera-pane :id (cons chain-id index) :kind 'readonly
+                                  :max-width scholia-note-width
                                   :bracket nil :indent indent
                                   :face (scholia-color-note-face
                                          (scholia-render-color
@@ -98,7 +101,8 @@ Return the shown note, or nil for an empty CHAIN."
       (scholia-render-forget chain-id)
       (let ((shown (cera-pane-show (scholia-render--panes chain)
                                    (overlay-end (car (last chain)))
-                                   scholia-annotation-column)))
+                                   (and (eq scholia-note-placement 'beside)
+                                        scholia-annotation-column))))
         (push (cons chain-id shown) scholia-render--shown)
         shown))))
 

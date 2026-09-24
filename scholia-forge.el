@@ -77,6 +77,20 @@ every buffer and every Emacs."
   :type 'natnum
   :group 'scholia)
 
+(defcustom scholia-forge-author-saturation 0.4
+  "Share of its saturation a palette colour keeps when an author wears it.
+Authors are told apart by hue, so their colours can stay muted; 1.0
+wears the palette as it is.  Colours in `scholia-forge-author-colors'
+are worn as given."
+  :type 'float
+  :group 'scholia)
+
+(defcustom scholia-forge-note-placement 'below
+  "Where a pull request's diff buffer draws its comments.
+It is `scholia-note-placement' for those buffers."
+  :type '(choice (const beside) (const below))
+  :group 'scholia)
+
 (defcustom scholia-forge-expand-commented-files t
   "Whether the file sections holding comments are expanded to show them."
   :type 'boolean
@@ -502,9 +516,21 @@ A region has to stay inside one hunk, as a comment on GitHub does."
 (defun scholia-forge-author-color (login)
   "Return the colour the comments of LOGIN are drawn in."
   (or (cdr (assoc login scholia-forge-author-colors))
-      (scholia-color-for-index
-       (mod (string-to-number (substring (md5 (or login "")) 0 6) 16)
-            (max 1 scholia-forge-author-palette-size)))))
+      (scholia-forge--muted
+       (scholia-color-for-index
+        (mod (string-to-number (substring (md5 (or login "")) 0 6) 16)
+             (max 1 scholia-forge-author-palette-size))))))
+
+(defun scholia-forge--muted (color)
+  "Return COLOR keeping `scholia-forge-author-saturation' of its saturation."
+  (if-let* ((hsl (scholia-color--hsl color)))
+      (pcase-let ((`(,hue ,saturation ,lightness) hsl))
+        (apply #'color-rgb-to-hex
+               (append (color-hsl-to-rgb hue
+                                         (* saturation scholia-forge-author-saturation)
+                                         lightness)
+                       '(2))))
+    color))
 
 (defun scholia-forge--color (_owner chain-id reply)
   "Return the colour of REPLY, or of the root of CHAIN-ID, by its author.
@@ -580,6 +606,7 @@ longer has is outdated, and nil."
     (setq-local scholia-annotation-authors scholia-forge-show-authors)
     (setq-local scholia-reply-tint-step scholia-forge-reply-tint-step)
     (setq-local scholia-render-color-function #'scholia-forge--color)
+    (setq-local scholia-note-placement scholia-forge-note-placement)
     (let* ((remote (mapcar #'scholia-forge--remote-annotation
                            (scholia-forge--get :comments)))
            (drafts (scholia-forge--drafts))
