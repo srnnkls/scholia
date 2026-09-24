@@ -6,7 +6,7 @@
 ;; Maintainer: Sören Nikolaus <soeren@code17.io>
 ;; URL: https://github.com/srnnkls/scholia
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "29.1") (cera "0.1.0"))
 ;; Keywords: convenience, tools
 
 ;; This file is not part of GNU Emacs.

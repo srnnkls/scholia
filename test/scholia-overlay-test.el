@@ -18,7 +18,8 @@
 (eval-and-compile
   (setq load-prefer-newer t)
   (require 'scholia-vars nil t)
-  (require 'scholia-overlay nil t))
+  (require 'scholia-overlay nil t)
+  (require 'scholia-render nil t))
 
 (defconst scholia-overlay-test--three-lines
   "alpha beta\ngamma delta\nepsilon zeta\n"
@@ -172,6 +173,23 @@ its terminator 23, line three 24-35 and its terminator 36.")
                            (7 11 "ghost-b")
                            (12 18 "ghost-c")))))
       (should (equal (length (delete-dups (copy-sequence faces))) 3)))))
+
+(ert-deftest scholia-overlay-the-run-before-a-note-leaves-the-line-visible ()
+  "The run between a line and the note beside it carries no face.
+That run is drawn as part of the note's string rather than as buffer
+text, so a face there paints over whatever the line itself wears — a
+note beside a magit diff line would lay the frame's background across
+the diff.  The runs opening the note's own lower lines keep their face,
+since display-only lines have nothing behind them."
+  (let* ((lines (list (cons "one" '(:background "red"))
+                      (cons "two" '(:background "red"))))
+         (rendered (scholia-render--string lines 4))
+         (note-start (- scholia-annotation-column 4)))
+    (should-not (get-text-property 0 'face rendered))
+    (should (equal '(:background "red")
+                   (get-text-property note-start 'face rendered)))
+    (should (eq 'scholia-prefix
+                (get-text-property (+ note-start 3) 'face rendered)))))
 
 (ert-deftest scholia-overlay-tints-a-reply-below-the-note-it-answers ()
   (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
@@ -373,6 +391,37 @@ its terminator 23, line three 24-35 and its terminator 36.")
       (should-not (scholia-chain-at 4))
       (scholia-test-should-overlay-range (car right) 6 9)
       (should (equal (scholia-chain-at 7) right)))))
+
+(ert-deftest scholia-overlay-lights-every-annotation-point-is-in ()
+  "Point in overlapping annotations lights both, and neither once away.
+The note beside the text and the underline under it move together, so an
+annotation reads as one thing whichever half of it is looked at."
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (should (memq 'scholia-core--emphasize-at-point post-command-hook))
+    (cl-letf (((symbol-function 'scholia-color--moved-away)
+               (lambda (_color) "#123456")))
+      (let* ((outer (scholia-create-chain 1 6 "the whole word"))
+             (inner (scholia-create-chain 3 6 "the tail of it"))
+             (underline (overlay-get (car outer) 'face))
+             (note-face (lambda (chain)
+                          (let* ((note (scholia-render-note chain))
+                                 (at (string-match (regexp-quote "the whole") note)))
+                            (and at (get-text-property at 'face note)))))
+             (resting (funcall note-face outer)))
+        (should (equal (plist-get resting :background) (scholia-color-for-index 0)))
+        (goto-char 4)
+        (scholia-core--emphasize-at-point)
+        (should (= 2 (length scholia-render--emphasized)))
+        (should (scholia-render-emphasized-p
+                 (overlay-get (car inner) 'scholia--chain-id)))
+        (should (equal (plist-get (funcall note-face outer) :background) "#123456"))
+        (should (equal (overlay-get (car outer) 'face) '(:underline "#123456")))
+        (goto-char 12)
+        (scholia-core--emphasize-at-point)
+        (should-not scholia-render--emphasized)
+        (should (equal (funcall note-face outer) resting))
+        (should (equal (overlay-get (car outer) 'face) underline))))))
 
 (provide 'scholia-overlay-test)
 ;;; scholia-overlay-test.el ends here

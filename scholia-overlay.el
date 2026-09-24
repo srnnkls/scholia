@@ -102,8 +102,7 @@ reached whatever the buffer is narrowed to."
 TEXT is the annotation text, CHAIN-ID the identity shared by the
 overlays, INDEX its stored colour index, and OWNER its session."
   (let ((face (scholia-color-highlight-face
-               (scholia-color-for-index
-                (scholia-session-color-index owner)))))
+               (scholia-render-color owner chain-id))))
     (mapcar (lambda (segment)
               (let ((overlay (make-overlay (car segment) (cdr segment) nil t)))
                 (overlay-put overlay 'scholia-annotation text)
@@ -114,6 +113,17 @@ overlays, INDEX its stored colour index, and OWNER its session."
                 (overlay-put overlay 'priority scholia-overlay--priority)
                 overlay))
             segments)))
+
+(defun scholia-refresh-chain-face (chain)
+  "Draw CHAIN's underline in the colour it wears now.
+Point moving into or out of the annotation changes that colour, so the
+underline is set again rather than the chain being rebuilt."
+  (let ((face (scholia-color-highlight-face
+               (scholia-render-color
+                (overlay-get (car chain) 'scholia--owner)
+                (overlay-get (car chain) 'scholia--chain-id)))))
+    (dolist (overlay chain)
+      (overlay-put overlay 'face face))))
 
 (defun scholia-create-chain (beg end annotation-text
                                  &optional color-index owner)

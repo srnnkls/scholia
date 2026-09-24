@@ -921,12 +921,9 @@ of a file no buffer visits passes `scholia-db-widen-over' instead."
 (defun scholia-db--merge-records (host guest)
   "Return the record HOST holding the annotations of record GUEST as well.
 Annotations GUEST shares with HOST by id are the same annotation and are
-taken once.  Two that cover the same characters are one annotation the
-two sessions each hold their own of, and they are folded into one
-spanning both and carrying both notes: `scholia-annotate' refuses to make
-an overlapping pair, so a record holding one would leave every annotation
-underneath unreachable by `scholia-annotation-at' and so by every command
-that reads it."
+taken once.  Annotations that share characters are one annotation the two
+sessions each hold their own of, so they are folded into one spanning
+both and carrying both notes."
   (let ((ids (mapcar #'scholia-db-annotation-id
                      (scholia-db-record-annotations host))))
     (scholia-db-make-record

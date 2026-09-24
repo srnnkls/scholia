@@ -129,7 +129,9 @@ past them turns the hue wheel on rather than starting the list again."
     "black"))
 
 (defun scholia-color-highlight-face (color)
-  "Return the face attributes marking text annotated in COLOR."
+  "Return the face attributes marking text annotated in COLOR.
+The annotated text is underlined, leaving the text itself readable; the
+note drawn beside it carries the colour as its background."
   (list :underline color))
 
 (defun scholia-color-note-face (color depth)
@@ -137,6 +139,65 @@ past them turns the hue wheel on rather than starting the list again."
   (let ((tinted (scholia-color-tint color depth)))
     (list :background tinted
           :foreground (scholia-color-foreground tinted))))
+
+(defcustom scholia-dark-theme-shade 12
+  "Percent of its lightness a session colour loses on a dark theme.
+The session colours are chosen pale, which reads on a light theme and
+glares on a dark one.  Deepening them there also leaves the room the
+colour needs to lift by `scholia-emphasis-shade' while point is in the
+annotation.  The step is small: a note is a block of colour carrying dark
+text, so it is read the way a theme's own keyword colours are, and those
+sit high."
+  :type 'natnum
+  :group 'scholia)
+
+(defcustom scholia-emphasis-shade 30
+  "Percent the annotation under point moves away from its own colour.
+Deeper and richer, on either theme, so the annotation point is in reads
+as the same hue with the light turned up rather than as a different one."
+  :type 'natnum
+  :group 'scholia)
+
+(defun scholia-color-on-theme (color)
+  "Return COLOR as a dark theme wears it, or COLOR itself on a light one.
+A colour or a theme that cannot be read answers COLOR, so a palette
+without a display behind it is drawn as it is written."
+  (if-let* ((hsl (scholia-color--hsl color))
+            (theme (scholia-color--hsl (face-background 'default nil t)))
+            ((<= (nth 2 theme) 0.5)))
+      (pcase-let* ((`(,hue ,saturation ,lightness) hsl)
+                   (`(,red ,green ,blue)
+                    (color-hsl-to-rgb
+                     hue saturation
+                     (* lightness (- 1.0 (/ scholia-dark-theme-shade 100.0))))))
+        (color-rgb-to-hex red green blue 2))
+    color))
+
+(defun scholia-color--moved-away (color)
+  "Return COLOR deepened by `scholia-emphasis-shade' percent.
+A session colour is pale on either theme, so down is the only direction
+with room in it: a step towards white lands on white and leaves nothing
+to read.  The lightness gives up that part of itself and the saturation
+takes the same part of the room it has left, which keeps the hue and
+makes it richer rather than merely darker.  Both steps are proportional,
+so a colour near an extreme moves less than one in the middle.  Nil when
+the colour cannot be read."
+  (when-let* ((hsl (scholia-color--hsl color)))
+    (pcase-let* ((`(,hue ,saturation ,lightness) hsl)
+                 (step (/ scholia-emphasis-shade 100.0))
+                 (`(,red ,green ,blue)
+                  (color-hsl-to-rgb hue
+                                    (+ saturation (* step (- 1.0 saturation)))
+                                    (- lightness (* step lightness)))))
+      (color-rgb-to-hex red green blue 2))))
+
+(defun scholia-color-emphasis-color (color)
+  "Return COLOR as the note of the annotation point is in wears it.
+The hue is kept and the colour deepens by `scholia-emphasis-shade'
+percent, so the annotation point is in reads as the same one with the
+light turned up rather than as another.  A colour that cannot be read
+answers COLOR, leaving the note as it was drawn."
+  (or (scholia-color--moved-away color) color))
 
 (provide 'scholia-color)
 ;;; scholia-color.el ends here

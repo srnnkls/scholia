@@ -74,5 +74,52 @@
                                tints)))
     (should (equal (scholia-color-tint "not a colour" 2) "not a colour"))))
 
+(ert-deftest scholia-color-emphasis-deepens-far-enough-to-see-on-either-theme ()
+  "The emphasis colour deepens and enriches, by the same step on either theme.
+A session colour is pale on both, so up is the direction without room in
+it: a step towards white washes the note out.  The step has to be large
+enough to see, which a colour already near white would not manage by
+lifting."
+  (let* ((colour (scholia-color-for-index 0))
+         (scholia-emphasis-shade 20)
+         (lightness (lambda (hex) (nth 2 (scholia-color--hsl hex))))
+         (saturation (lambda (hex) (nth 1 (scholia-color--hsl hex))))
+         (on (lambda (background)
+               (cl-letf (((symbol-function 'face-background)
+                          (lambda (&rest _) background)))
+                 (scholia-color--moved-away colour))))
+         (own (funcall lightness colour))
+         (light (funcall on "#fafafa"))
+         (dark (funcall on "#202020")))
+    (should (equal light dark))
+    (should (< (funcall lightness light) (- own 0.08)))
+    (should (> (funcall lightness light) 0.35))
+    (should (> (funcall saturation light) (funcall saturation colour)))
+    (should (<= (funcall saturation light) 1.0))))
+
+(ert-deftest scholia-color-deepens-the-palette-on-a-dark-theme ()
+  "A session colour is deepened on a dark theme and left alone on a light one.
+Deepening leaves the room the colour needs to lift while point is in the
+annotation, which a pale colour on a dark theme does not have."
+  (let* ((colour (scholia-color-for-index 0))
+         (scholia-dark-theme-shade 12)
+         (scholia-emphasis-shade 20)
+         (lightness (lambda (hex) (nth 2 (scholia-color--hsl hex))))
+         (on (lambda (background function)
+               (cl-letf (((symbol-function 'face-background)
+                          (lambda (&rest _) background)))
+                 (funcall function colour))))
+         (own (funcall lightness colour))
+         (light (funcall on "#fafafa" #'scholia-color-on-theme))
+         (dark (funcall on "#202020" #'scholia-color-on-theme)))
+    (should (equal light colour))
+    (should (< (funcall lightness dark) own))
+    (should (> (funcall lightness dark) 0.2))
+    (let ((lit (cl-letf (((symbol-function 'face-background)
+                          (lambda (&rest _) "#202020")))
+                 (scholia-color-emphasis-color dark))))
+      (should (< (funcall lightness lit) (- (funcall lightness dark) 0.08)))
+      (should (> (funcall lightness lit) 0.35)))))
+
 (provide 'scholia-color-test)
 ;;; scholia-color-test.el ends here

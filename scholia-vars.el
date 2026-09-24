@@ -178,8 +178,8 @@ optional Corfu completion.  `minibuffer' uses `completing-read'."
   "How many past annotations are offered as recurring candidates."
   :type 'natnum)
 
-(defcustom scholia-session-colors '("#EEF192" "#92EEF1" "#F192EE"
-                                    "#B6F192" "#F1B692" "#9296F1")
+(defcustom scholia-session-colors '("#F5DD8E" "#8EF5DD" "#DD8EF5"
+                                    "#CFF58E" "#F5988E" "#8EADF5")
   "Colours sessions are drawn in, taken in order, one session each.
 Every annotation of a session wears its colour, whichever of them it is.
 A buffer showing more sessions than there are colours here turns the hue
@@ -208,7 +208,9 @@ Applied once per level of depth, so a reply to a reply fades twice."
 
 (defface scholia-prefix
   '((t (:inherit default)))
-  "Face of the padding between a text line and its annotation.")
+  "Face of the runs opening the note lines below an annotated line.
+The run between the line and the note it is drawn beside is left
+unfaced, so whatever that line wears still shows through it.")
 
 (defcustom scholia-use-messages t
   "Whether scholia reports what it did in the echo area."

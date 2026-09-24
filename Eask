@@ -14,6 +14,7 @@
 (source 'melpa)
 
 (depends-on "emacs" "29.1")
+(depends-on "cera" :repo "srnnkls/cera" :fetcher 'github)
 
 (development
  (depends-on "corfu")

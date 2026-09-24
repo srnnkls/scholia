@@ -14,8 +14,9 @@ git clone https://github.com/srnnkls/scholia.git ~/.emacs.d/site-lisp/scholia
 (require 'scholia)
 ```
 
-Enable `scholia-mode` in a buffer to annotate immediately into the resolved default session. No
-integration package or customization is required. The first optional setting is
+Annotate in a buffer and the note goes into the resolved default session; annotating also turns
+`scholia-mode` on, which is what saves the note on kill and keeps it placed as the file is edited.
+No integration package or customization is required. The first optional setting is
 `scholia-session-directory`, which chooses where named sessions live:
 
 ```emacs-lisp

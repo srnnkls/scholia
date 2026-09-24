@@ -90,9 +90,8 @@ Each line is a cons of its text and the face attributes it wears."
 Each line is a cons of its text and the face attributes it wears."
   (let* ((head (car chain))
          (chain-id (overlay-get head 'scholia--chain-id))
-         (color (scholia-color-for-index
-                 (scholia-session-color-index
-                  (overlay-get head 'scholia--owner))))
+         (color (scholia-render-color (overlay-get head 'scholia--owner)
+                                      chain-id))
          (width (scholia-render--width))
          (revision (overlay-get head 'scholia-core--revision))
          (text (concat (overlay-get head 'scholia-annotation)
@@ -106,10 +105,14 @@ Each line is a cons of its text and the face attributes it wears."
   "Return LINES as one display string starting at COLUMN.
 The first line is set out to `scholia-annotation-column' from COLUMN and
 every line after it from the start of its own line, so the note reads as
-a block however long the text beside it is."
-  (let ((opening (propertize
-                  (make-string (max 1 (- scholia-annotation-column column)) ?\s)
-                  'face 'scholia-prefix))
+a block however long the text beside it is.
+
+The run before the first note carries no face, so the line the note is
+drawn beside shows through it: a note beside a magit diff line would
+otherwise paint the frame's own background across the diff.  The runs
+opening the lines below are faced, since display-only lines have nothing
+behind them to show."
+  (let ((opening (make-string (max 1 (- scholia-annotation-column column)) ?\s))
         (continuation (propertize
                        (concat "\n" (make-string scholia-annotation-column ?\s))
                        'face 'scholia-prefix))
@@ -162,6 +165,37 @@ Return the note overlay, or nil for an empty CHAIN."
 (defun scholia-render-clear ()
   "Remove every note of the current buffer."
   (mapc #'delete-overlay (scholia-render--notes)))
+
+(defvar-local scholia-render--emphasized nil
+  "Chain ids drawn as the annotations point is in.")
+
+(defun scholia-render-color (owner chain-id)
+  "Return the colour a chain of OWNER named CHAIN-ID is drawn in.
+The session's own colour, lit a step off the theme while point is in the
+annotation, so the underline on the text and the note beside it move
+together."
+  (let ((own (scholia-color-on-theme
+              (scholia-color-for-index (scholia-session-color-index owner)))))
+    (if (scholia-render-emphasized-p chain-id)
+        (scholia-color-emphasis-color own)
+      own)))
+
+(defun scholia-render-emphasized-p (chain-id)
+  "Return non-nil when CHAIN-ID's note is drawn as one point is in."
+  (and (member chain-id scholia-render--emphasized) t))
+
+(defun scholia-render-set-emphasis (chain-ids)
+  "Draw the notes of CHAIN-IDS as the ones point is in.
+Return the ids whose state changed, which are the notes a caller has to
+draw again; point staying inside the same annotations changes nothing."
+  (let ((changed (append (seq-difference chain-ids scholia-render--emphasized)
+                         (seq-difference scholia-render--emphasized chain-ids))))
+    (setq scholia-render--emphasized chain-ids)
+    changed))
+
+(defun scholia-render-emphasis-clear ()
+  "Forget which notes were drawn as the ones point is in."
+  (setq scholia-render--emphasized nil))
 
 (provide 'scholia-render)
 ;;; scholia-render.el ends here

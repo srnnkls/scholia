@@ -788,5 +788,20 @@ Emacs whose ERT sets the variable."
             (set-default (nth 0 entry) (nth 2 entry))
           (makunbound (nth 0 entry)))))))
 
+(ert-deftest scholia-core-annotating-enables-the-mode ()
+  "Annotating a buffer turns the mode on, so the buffer is tracked.
+The mode owns saving on kill, re-chaining as the file is edited and the
+mark on the annotation point is in, so an annotation made without it
+would be a note nothing looks after."
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer buffer scholia-core-test--source
+      (setq-local scholia-session "annotate-enables")
+      (setq-local scholia-project-root-function (lambda () nil))
+      (should-not scholia-mode)
+      (goto-char 1)
+      (scholia-annotate "a note")
+      (should scholia-mode)
+      (should (scholia-buffer-chains)))))
+
 (provide 'scholia-core-test)
 ;;; scholia-core-test.el ends here

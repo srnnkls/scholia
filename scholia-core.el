@@ -27,9 +27,10 @@
 
 (declare-function scholia-ui-read-annotation "scholia-ui")
 (declare-function scholia-session-restore-visibility "scholia-session")
+(declare-function scholia-mode "scholia")
 
 (defvar scholia-mode)
-(defvar scholia-edit--session)
+(defvar cera--active)
 
 
 ;;;; What a buffer annotates, and into which session
@@ -412,7 +413,7 @@ however often it is stored and whatever the edits in between."
 (defun scholia-save-annotations ()
   "Store every visible session's annotations under their owners."
   (interactive)
-  (when (bound-and-true-p scholia-edit--session)
+  (when (bound-and-true-p cera--active)
     (user-error "Finish the annotation first: RET saves, ESC cancels"))
   (dolist (session (scholia-effective-sessions))
     (scholia-core--store
@@ -571,6 +572,27 @@ naming the session itself still gets the signal from
   (remove-hook 'window-size-change-functions
                #'scholia-core--redraw-buffer t))
 
+(defun scholia-core--emphasize-at-point (&rest _)
+  "Draw the note of every annotation point is in as the one it is in.
+An overlap leaves point in more than one, and each note is drawn that
+way.  Only the notes whose state changed are drawn again."
+  (let ((changed (scholia-render-set-emphasis
+                  (mapcar (lambda (chain)
+                            (overlay-get (car chain) 'scholia--chain-id))
+                          (scholia-chains-at)))))
+    (dolist (chain (scholia-buffer-chains))
+      (when (member (overlay-get (car chain) 'scholia--chain-id) changed)
+        (scholia-refresh-chain-face chain)
+        (scholia-render-chain chain)))))
+
+(defun scholia-core--watch-point ()
+  "Mark the annotations point is in after every command."
+  (add-hook 'post-command-hook #'scholia-core--emphasize-at-point -90 t))
+
+(defun scholia-core--unwatch-point ()
+  "Stop marking the annotations point is in."
+  (remove-hook 'post-command-hook #'scholia-core--emphasize-at-point t))
+
 (defun scholia-core--cache-replies (annotations)
   "Hold the replies among ANNOTATIONS against the chains they answer."
   (dolist (chain (scholia-buffer-chains))
@@ -617,6 +639,7 @@ hidden during a sitting is not brought back by the next buffer opened.")
   (scholia-core--restore-visibility-once)
   (scholia-core--fall-back-to-default)
   (scholia-core--watch-window-size)
+  (scholia-core--watch-point)
   (add-hook 'kill-buffer-hook #'scholia-core--save-on-kill nil t)
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
   (unless (scholia-buffer-chains)
@@ -648,8 +671,10 @@ only once no annotated buffer is left to need it."
     (dolist (overlay chain)
       (delete-overlay overlay)))
   (scholia-render-clear)
+  (scholia-render-emphasis-clear)
   (scholia-disarm-rechaining)
   (scholia-core--unwatch-window-size)
+  (scholia-core--unwatch-point)
   (setq scholia--session-state nil
         scholia--replies nil
         scholia--unplaced-annotations nil
@@ -692,6 +717,10 @@ holds no text on any line, or when the note read is empty."
        ((string= note "")
         (scholia-core--report "Annotation text is empty"))
        (t
+        ;; The mode owns saving on kill and re-chaining, so annotate turns it on.
+        (unless (bound-and-true-p scholia-mode)
+          (require 'scholia)
+          (scholia-mode 1))
         (scholia-core--session-state owner)
         (scholia-create-chain (car bounds) (cdr bounds) note nil owner)
         (deactivate-mark)
@@ -707,6 +736,9 @@ An active region makes a new annotation, overlapping whatever is already
 there.  With no region, an annotation at point is edited instead, and
 anything else annotates the symbol at point.  Nothing here signals: what
 cannot be annotated is reported.
+
+Annotating turns `scholia-mode' on, since the mode owns saving on kill
+and re-chaining as the file is edited.
 
 `scholia-annotation-editor' selects the input interface.  The inline
 editor stores annotations after accepting input and removing its field."
