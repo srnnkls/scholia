@@ -191,7 +191,11 @@ b.txt has a line added."
           (outdated (scholia-forge-test--chains 'outdated)))
       (should conversation)
       (should (= (overlay-start (car conversation)) (point-min)))
-      (should (equal (scholia-forge-test--replies conversation)
+      (should-not (scholia-forge-test--replies conversation))
+      (should (equal (mapcar (lambda (entry) (plist-get (cdr entry) :text))
+                             (cdr (car (get (overlay-get (car conversation)
+                                                         'scholia--chain-id)
+                                            'scholia-forge-threads))))
                      '("[APPROVED] Ship it" "Looks good")))
       (should (= 3 (length remote)))
       (let ((threads (mapcar (lambda (chain)
@@ -323,9 +327,10 @@ b.txt has a line added."
 (ert-deftest scholia-forge-heads-the-conversation-with-how-the-pull-request-stands ()
   (scholia-forge-test--with-pull
     (let ((conversation (car (scholia-forge-test--chains 'conversation))))
-      (should (equal (overlay-get (car conversation) 'scholia-annotation)
-                     (concat "open · alice · main ← feature · bug, ui · review: carol\n"
-                             "The description"))))
+      (should (string-prefix-p
+               (concat "open · alice · main ← feature · bug, ui · review: carol\n"
+                       "The description\n2 comments in the conversation")
+               (overlay-get (car conversation) 'scholia-annotation))))
     (should (equal (scholia-forge--summary '(:state "closed" :merged_at "x"
                                                     :user (:login "a")
                                                     :base (:ref "b") :head (:ref "h")))
@@ -340,6 +345,35 @@ b.txt has a line added."
     (magit-diff-setup-buffer "base...head" nil nil nil 'committed t)
     (should (local-variable-p 'forge-buffer-topic))
     (should (eq forge-buffer-topic 'the-topic))))
+
+(ert-deftest scholia-forge-shows-only-a-threads-latest-replies ()
+  (scholia-forge-test--with-pull
+    (let ((scholia-forge-note-replies 0))
+      (scholia-forge--decorate)
+      (let ((chain (seq-find (lambda (chain)
+                               (equal (scholia-forge-test--line chain) "+changed 3"))
+                             (scholia-forge-test--chains 'remote))))
+        (should-not (scholia-forge-test--replies chain))
+        (should (string-match-p "… 1 earlier reply"
+                                (overlay-get (car chain) 'scholia-annotation)))
+        (should (= 1 (length (cdr (car (get (overlay-get (car chain) 'scholia--chain-id)
+                                            'scholia-forge-threads))))))))))
+
+(ert-deftest scholia-forge-cuts-long-comments-short-in-their-notes ()
+  "A note shows the start of a long comment; the thread keeps all of it."
+  (should (equal (scholia-forge--clip "one\ntwo\nthree" 5) "one\ntwo\nthree"))
+  (should (string-prefix-p "one\ntwo\n… 1 more line"
+                           (scholia-forge--clip "one\ntwo\nthree" 2)))
+  (scholia-forge-test--with-pull
+    (let ((scholia-forge-note-lines 1))
+      (scholia-forge-test--goto "+added")
+      (scholia-forge-comment "first line\nsecond line")
+      (let* ((chain (car (scholia-forge-test--chains 'draft)))
+             (id (overlay-get (car chain) 'scholia--chain-id)))
+        (should (string-prefix-p "first line\n… 1 more line"
+                                 (overlay-get (car chain) 'scholia-annotation)))
+        (should (equal (plist-get (car (car (get id 'scholia-forge-threads))) :text)
+                       "first line\nsecond line"))))))
 
 (provide 'scholia-forge-test)
 ;;; scholia-forge-test.el ends here

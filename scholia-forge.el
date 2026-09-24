@@ -91,6 +91,27 @@ It is `scholia-note-placement' for those buffers."
   :type '(choice (const beside) (const below))
   :group 'scholia)
 
+(defcustom scholia-forge-note-lines 12
+  "How many lines of a comment its note shows before it is cut short.
+A note taller than the window cannot be scrolled through, so a long
+comment shows its start, and `scholia-forge-show-thread' shows it all."
+  :type 'natnum
+  :group 'scholia)
+
+(defcustom scholia-forge-note-replies 4
+  "How many of a thread's replies its note shows, the latest ones.
+The earlier ones are counted under the first comment and shown in full
+by `scholia-forge-show-thread'."
+  :type 'natnum
+  :group 'scholia)
+
+(defcustom scholia-forge-conversation-lines 4
+  "How many lines of the description the conversation note shows.
+The conversation's comments are counted there and shown in full by
+`scholia-forge-show-thread'."
+  :type 'natnum
+  :group 'scholia)
+
 (defcustom scholia-forge-expand-commented-files t
   "Whether the file sections holding comments are expanded to show them."
   :type 'boolean
@@ -241,6 +262,23 @@ the parsed answer; without one it waits, and signals
 (defun scholia-forge--text (body)
   "Return BODY as a note shows it."
   (string-trim (string-replace "\r" "" (or body ""))))
+
+(defun scholia-forge--clip (text lines)
+  "Return TEXT cut to its first LINES lines, saying how many more there are."
+  (let ((all (split-string text "\n")))
+    (if (<= (length all) lines)
+        text
+      (concat (string-join (seq-take all lines) "\n")
+              (format "\n… %d more line%s: %s" (- (length all) lines)
+                      (if (= (- (length all) lines) 1) "" "s")
+                      (substitute-command-keys
+                       "\\<scholia-forge-mode-map>\\[scholia-forge-show-thread]"))))))
+
+(defun scholia-forge--clipped (annotation)
+  "Return ANNOTATION with its text cut to `scholia-forge-note-lines'."
+  (plist-put (copy-sequence annotation) :text
+             (scholia-forge--clip (plist-get annotation :text)
+                                  scholia-forge-note-lines)))
 
 (defun scholia-forge--remote-annotation (comment)
   "Return the review COMMENT GitHub answered as an annotation."
@@ -545,18 +583,30 @@ A note not yet made is the viewer's own."
 
 (defun scholia-forge--place (range root replies kind &optional threads)
   "Draw ROOT over RANGE with REPLIES under it, as a thread of KIND.
-KIND is `remote', `draft', `conversation' or `outdated'; THREADS are the
-threads an outdated marker stands for."
-  (when-let* ((chain (scholia-create-chain (car range) (cdr range)
-                                           (plist-get root :text) nil
-                                           "github")))
+KIND is `remote', `draft', `conversation' or `outdated'.  THREADS are
+the threads the note stands for, shown in full by
+`scholia-forge-show-thread'; they default to ROOT and REPLIES, which the
+note shows cut to `scholia-forge-note-lines' each."
+  (when-let* ((hidden (max 0 (- (length replies) scholia-forge-note-replies)))
+              (chain (scholia-create-chain
+                      (car range) (cdr range)
+                      (concat (plist-get (scholia-forge--clipped root) :text)
+                              (when (> hidden 0)
+                                (format "\n… %d earlier repl%s: %s" hidden
+                                        (if (= hidden 1) "y" "ies")
+                                        (substitute-command-keys
+                                         "\\<scholia-forge-mode-map>\\[scholia-forge-show-thread]"))))
+                      nil "github")))
     (let ((id (overlay-get (car chain) 'scholia--chain-id)))
       (put id 'scholia-core--id (plist-get root :id))
       (put id 'scholia-author (plist-get root :author))
       (put id 'scholia-forge-root root)
       (put id 'scholia-forge-kind kind)
-      (put id 'scholia-forge-threads threads)
-      (setf (alist-get id scholia--replies) replies)
+      (put id 'scholia-forge-threads (or threads (list (cons root replies))))
+      (setf (alist-get id scholia--replies)
+            (mapcar (lambda (entry)
+                      (cons (car entry) (scholia-forge--clipped (cdr entry))))
+                    (nthcdr hidden replies)))
       (scholia-refresh-chain-face chain)
       (scholia-render-chain chain)
       chain)))
@@ -620,9 +670,19 @@ longer has is outdated, and nil."
          (append (mapcar (lambda (annotation)
                            (plist-get (plist-get annotation :forge) :path))
                          annotations))))
-      (let ((conversation (scholia-forge--conversation)))
-        (scholia-forge--place (scholia-forge--first-line) (car conversation)
-                              (cdr conversation) 'conversation))
+      (let* ((conversation (scholia-forge--conversation))
+             (root (car conversation))
+             (count (length (cdr conversation))))
+        (scholia-forge--place
+         (scholia-forge--first-line)
+         (plist-put (copy-sequence root) :text
+                    (concat (scholia-forge--clip (plist-get root :text)
+                                                 scholia-forge-conversation-lines)
+                            (format "\n%d comment%s in the conversation: %s"
+                                    count (if (= count 1) "" "s")
+                                    (substitute-command-keys
+                                     "\\<scholia-forge-mode-map>\\[scholia-forge-show-thread]"))))
+         nil 'conversation (list conversation)))
       (dolist (root (seq-remove (lambda (annotation) (plist-get annotation :reply-to))
                                 remote))
         (let ((replies (scholia-forge--replies root annotations))
@@ -911,17 +971,17 @@ compiled, so its classes are unknown to the compiler."
                                  'scholia-forge-threads))))
         text))
       ('conversation
-       (let* ((quoted (scholia-forge--choose
+       (let* ((thread (car (get (overlay-get (car chain) 'scholia--chain-id)
+                                'scholia-forge-threads)))
+              (quoted (scholia-forge--choose
                        "Reply to: "
-                       (cons root (seq-remove #'scholia-forge--draft-p
-                                              (mapcar #'cdr (alist-get
-                                                             (overlay-get (car chain)
-                                                                          'scholia--chain-id)
-                                                             scholia--replies))))))
+                       (cons (car thread)
+                             (seq-remove #'scholia-forge--draft-p
+                                         (mapcar #'cdr (cdr thread))))))
               (text (or text (scholia-forge--read "Reply: "))))
          (scholia-forge--draft-add
           (scholia-forge--draft
-           (if (eq quoted root)
+           (if (eq quoted (car thread))
                (list :kind 'conversation)
              (list :kind 'conversation :quote (plist-get quoted :text)))
            text "gh:pr")))))
@@ -941,10 +1001,10 @@ compiled, so its classes are unknown to the compiler."
   (seq-filter
    #'scholia-forge--draft-p
    (seq-mapcat (lambda (chain)
-                 (cons (scholia-forge--chain-root chain)
-                       (mapcar #'cdr (alist-get (overlay-get (car chain)
-                                                             'scholia--chain-id)
-                                                scholia--replies))))
+                 (seq-mapcat (lambda (thread)
+                               (cons (car thread) (mapcar #'cdr (cdr thread))))
+                             (get (overlay-get (car chain) 'scholia--chain-id)
+                                  'scholia-forge-threads)))
                (scholia-chains-at))))
 
 (defun scholia-forge--draft-at (verb)
@@ -1099,36 +1159,37 @@ has it, so what fails is still there to push again."
   "Insert THREAD, a root and its replies, under the hunk it was made on."
   (let* ((root (car thread))
          (forge (plist-get root :forge)))
-    (insert (propertize (format "%s:%s at %s\n"
-                                (plist-get forge :path)
-                                (or (plist-get forge :original_line) "?")
-                                (substring (or (plist-get forge :original_commit_id)
-                                               "unknown")
-                                           0 (min 7 (length (or (plist-get forge :original_commit_id)
-                                                                "unknown")))))
-                        'face 'magit-section-heading))
-    (dolist (line (split-string (or (plist-get forge :diff_hunk) "") "\n"))
-      (insert (propertize line 'face (pcase (and (> (length line) 0) (aref line 0))
-                                       (?+ 'diff-added)
-                                       (?- 'diff-removed)
-                                       (?@ 'diff-hunk-header)
-                                       (_ 'diff-context)))
-              "\n"))
-    (insert "\n")
+    (if (not (plist-get forge :path))
+        (insert (propertize "Conversation\n\n" 'face 'magit-section-heading))
+      (scholia-forge--insert-hunk forge))
     (scholia-forge--insert-comment root 0)
     (pcase-dolist (`(,depth . ,reply) (cdr thread))
       (scholia-forge--insert-comment reply depth))))
 
+(defun scholia-forge--insert-hunk (forge)
+  "Insert where the review comment FORGE was made, and the hunk it was made on."
+  (let ((commit (or (plist-get forge :original_commit_id) "unknown")))
+    (insert (propertize (format "%s:%s at %s\n"
+                                (plist-get forge :path)
+                                (or (plist-get forge :original_line) "?")
+                                (substring commit 0 (min 7 (length commit))))
+                        'face 'magit-section-heading)))
+  (dolist (line (split-string (or (plist-get forge :diff_hunk) "") "\n"))
+    (insert (propertize line 'face (pcase (and (> (length line) 0) (aref line 0))
+                                     (?+ 'diff-added)
+                                     (?- 'diff-removed)
+                                     (?@ 'diff-hunk-header)
+                                     (_ 'diff-context)))
+            "\n"))
+  (insert "\n"))
+
 (defun scholia-forge-show-thread ()
-  "Show the thread at point in full, or the outdated threads a marker stands for."
+  "Show the threads the note at point stands for in full."
   (interactive)
   (scholia-forge--ensure)
   (let* ((chain (scholia-forge--chain-at))
          (id (overlay-get (car chain) 'scholia--chain-id))
-         (threads (if (eq (scholia-forge--chain-kind chain) 'outdated)
-                      (get id 'scholia-forge-threads)
-                    (list (cons (scholia-forge--chain-root chain)
-                                (alist-get id scholia--replies)))))
+         (threads (get id 'scholia-forge-threads))
          (buffer (get-buffer-create
                   (format "*scholia-forge: %s/%s #%d*" (scholia-forge--get :owner)
                           (scholia-forge--get :repo) (scholia-forge--get :number)))))
