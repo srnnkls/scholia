@@ -447,5 +447,37 @@ annotation reads as one thing whichever half of it is looked at."
         (should (equal (funcall note-face outer) resting))
         (should (equal (overlay-get (car outer) 'face) underline))))))
 
+(ert-deftest scholia-overlay-colours-each-reply-by-the-colour-function ()
+  "A colour function colours a reply by its own annotation, the note by none.
+Without one every pane wears the session's colour, as the underline does."
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (let* ((scholia-reply-tint-step 0)
+           (chain (scholia-create-chain 1 6 "the note"))
+           (key (overlay-get (car chain) 'scholia--chain-id))
+           (panes (lambda ()
+                    (mapcar (lambda (pane) (plist-get (cera-pane-face pane) :background))
+                            (cera-shown-panes (alist-get key scholia-render--shown))))))
+      (setf (alist-get key scholia--replies)
+            (list (cons 1 (scholia-db-make-annotation "r1" "the answer" nil nil nil))))
+      (scholia-render-chain chain)
+      (let ((plain (funcall panes)))
+        (should (equal (cadr plain)
+                       (plist-get (scholia-color-note-face
+                                   (scholia-render-color nil key) 1)
+                                  :background)))
+        (setq-local scholia-render-color-function
+                    (lambda (_owner _chain-id reply) (if reply "#ff0000" "#0000ff")))
+        (scholia-refresh-chain-face chain)
+        (scholia-render-chain chain)
+        (let ((coloured (funcall panes)))
+          (should (equal (cadr coloured)
+                         (plist-get (scholia-color-note-face
+                                     (scholia-color-on-theme "#ff0000") 1)
+                                    :background)))
+          (should (equal (overlay-get (car chain) 'face)
+                         (scholia-color-highlight-face
+                          (scholia-color-on-theme "#0000ff")))))))))
+
 (provide 'scholia-overlay-test)
 ;;; scholia-overlay-test.el ends here

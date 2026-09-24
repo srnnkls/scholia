@@ -76,7 +76,11 @@ and each of them is followed by a pane naming its author while
                (let ((indent (* depth scholia-render-reply-indent)))
                  (list (cera-pane :id (cons chain-id index) :kind 'readonly
                                   :bracket nil :indent indent
-                                  :face (scholia-color-note-face color depth)
+                                  :face (scholia-color-note-face
+                                         (scholia-render-color
+                                          (overlay-get head 'scholia--owner)
+                                          chain-id reply)
+                                         depth)
                                   :text (scholia-db-annotation-text reply))
                        (scholia-render--author-pane
                         (list chain-id index 'author)
@@ -120,13 +124,25 @@ Return the shown note, or nil for an empty CHAIN."
 (defvar-local scholia-render--emphasized nil
   "Chain ids drawn as the annotations point is in.")
 
-(defun scholia-render-color (owner chain-id)
+(defvar-local scholia-render-color-function nil
+  "Function choosing the colour a note or reply is drawn in, or nil.
+Called with the OWNER, CHAIN-ID and REPLY `scholia-render-color' is,
+it returns a colour or nil for the session's own.  A buffer whose notes
+are coloured by something other than the session they belong to, such
+as their author, sets it.")
+
+(defun scholia-render-color (owner chain-id &optional reply)
   "Return the colour a chain of OWNER named CHAIN-ID is drawn in.
-The session's own colour, lit a step off the theme while point is in the
-annotation, so the underline on the text and the note beside it move
-together."
+REPLY is the annotation of a reply under the chain, drawn in its own
+colour, or nil for the chain's note and the text it underlines.  The
+colour is what `scholia-render-color-function' gives, or the session's
+own, lit a step off the theme while point is in the annotation, so the
+underline on the text and the note beside it move together."
   (let ((own (scholia-color-on-theme
-              (scholia-color-for-index (scholia-session-color-index owner)))))
+              (or (and scholia-render-color-function
+                       (funcall scholia-render-color-function
+                                owner chain-id reply))
+                  (scholia-color-for-index (scholia-session-color-index owner))))))
     (if (scholia-render-emphasized-p chain-id)
         (scholia-color-emphasis-color own)
       own)))
