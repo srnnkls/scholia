@@ -172,7 +172,7 @@ The note is its own overlay, found by chain id rather than reached
 through the chain, so deleting the chain alone leaves the space it draws
 still taken in the buffer."
   (scholia-test-with-session-directory
-    (scholia-test-with-temp-file-buffer buffer scholia-core-test--source
+    (scholia-test-with-temp-file-buffer _buffer scholia-core-test--source
       (setq-local scholia-session "note-delete")
       (scholia-mode 1)
       (goto-char 1)
@@ -794,7 +794,7 @@ The mode owns saving on kill, re-chaining as the file is edited and the
 mark on the annotation point is in, so an annotation made without it
 would be a note nothing looks after."
   (scholia-test-with-session-directory
-    (scholia-test-with-temp-file-buffer buffer scholia-core-test--source
+    (scholia-test-with-temp-file-buffer _buffer scholia-core-test--source
       (setq-local scholia-session "annotate-enables")
       (setq-local scholia-project-root-function (lambda () nil))
       (should-not scholia-mode)
