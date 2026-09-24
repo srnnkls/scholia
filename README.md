@@ -179,6 +179,27 @@ advice, or Marginalia registration:
 (scholia-ui-marginalia-teardown)
 ```
 
+### GitHub pull requests
+
+`scholia-forge` shows a pull request's comments in a Magit diff of it, named
+`*magit-diff: OWNER/REPO #N TITLE*`. It needs Magit and the GitHub CLI `gh`, authenticated for the
+pull request's host; forge is only needed for `scholia-forge-diff-pullreq`, which opens the pull
+request at point. `scholia-forge-open` opens one from its host, owner, repository, number, revision
+range and title.
+
+Review comments are drawn on their lines with their replies under them, comments on a whole file on
+its heading, and the description, conversation comments and review summaries on the first line.
+Each comment wears its author's colour and byline; `scholia-forge-author-colors` pins colours to
+logins. Comments whose line the diff no longer has are gathered in a marker on their file's heading,
+and `scholia-forge-show-thread` (`C-c C-o`) shows them with the hunk they were made on.
+
+Comments and replies written there are drafts, kept in the session `OWNER-REPO-pr-N` until
+`scholia-forge-push` (`C-c C-p`) sends them: comments on lines go in one review, submitted as a plain
+comment or, with a prefix argument, as an approval or a change request; replies and conversation
+comments follow. `scholia-annotate`, `scholia-reply-to`, `scholia-edit-annotation` and
+`scholia-delete-annotation` draft, reply to, edit and delete drafts there; comments already on
+GitHub are not changed. `scholia-forge-refetch` (`C-c C-g`) reads the pull request again.
+
 The dashboard and Org Remark exporter are commands from separate modules:
 
 ```emacs-lisp

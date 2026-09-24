@@ -1,5 +1,13 @@
 # News
 
+## Unreleased
+
+`scholia-forge` shows a GitHub pull request's comments as threads in a Magit diff of it, coloured by
+author, and keeps new comments and replies as drafts in a session of the pull request's own until
+they are pushed to GitHub in one batch. A buffer can colour notes and replies by its own
+`scholia-render-color-function`. Notes are cera panes beside the annotated line, a reply can answer
+a reply, and `scholia-annotation-authors` records and shows who wrote each annotation.
+
 ## 0.1.0 — 2026-08-29
 
 Initial release of session-based source annotations, threaded replies, export, search, status,

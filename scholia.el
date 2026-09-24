@@ -74,6 +74,10 @@
 (autoload 'scholia-search "scholia-search" nil t)
 ;;;###autoload
 (autoload 'scholia-search-sends "scholia-search" nil t)
+;;;###autoload
+(autoload 'scholia-forge-diff-pullreq "scholia-forge" nil t)
+;;;###autoload
+(autoload 'scholia-forge-open "scholia-forge")
 
 (defvar scholia-mode-map
   (let ((map (make-sparse-keymap)))

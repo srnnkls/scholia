@@ -172,7 +172,8 @@
            (scholia-harness-test--depended-package-names forms)))
       (dolist (package '("magit-section" "org-remark"))
         (should (member package development-packages))
-        (should-not (member package runtime-packages))))))
+        (should-not (member package runtime-packages)))
+      (should-not (member "forge" runtime-packages)))))
 
 (ert-deftest scholia-harness-eask-resolves-the-herdr-exclusion ()
   (skip-unless (fboundp 'eask-expand-file-specs))
