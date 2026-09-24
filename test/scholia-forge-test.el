@@ -142,8 +142,13 @@ b.txt has a line added."
     (should (equal (scholia-forge--get :viewer) "me"))
     (should (equal (scholia-forge--get :session) "owner-repo-pr-42"))
     (should (eq scholia-note-placement 'below))
-    (should (string-prefix-p
-             "\n" (scholia-render-note (car (scholia-forge-test--chains 'remote)))))
+    (let* ((chain (car (scholia-forge-test--chains 'remote)))
+           (shown (alist-get (overlay-get (car chain) 'scholia--chain-id)
+                             scholia-render--shown))
+           (overlay (car (cera-shown-overlays shown))))
+      (should (= (overlay-start overlay)
+                 (save-excursion (goto-char (overlay-end (car (last chain))))
+                                 (1+ (line-end-position))))))
     (should (equal (scholia-forge--session-name "git.corp" "o w" "r/x" 7)
                    "git.corp-o-w-r-x-pr-7"))))
 

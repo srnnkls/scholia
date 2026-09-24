@@ -492,8 +492,10 @@ Without one every pane wears the session's colour, as the underline does."
     (scholia-mode 1)
     (setq-local scholia-note-placement 'below)
     (let ((chain (scholia-create-chain 1 6 "the note")))
-      (should (string-prefix-p "\nthe note"
-                               (substring-no-properties (scholia-render-note chain)))))))
+      (should (string-prefix-p "the note"
+                               (substring-no-properties (scholia-render-note chain))))
+      (should (= (overlay-start (car (cera-shown-overlays (car (scholia-render--notes)))))
+                 12)))))
 
 (ert-deftest scholia-overlay-wraps-a-note-at-the-note-width ()
   "A note wraps at `scholia-note-width' however wide the window is."
