@@ -395,7 +395,11 @@ b.txt has a line added."
 (ert-deftest scholia-forge-keys-win-over-evils-magit-bindings ()
   "In normal state the mode's keys come before the ones evil gives Magit."
   (skip-unless (require 'evil nil t))
-  (should (evil-intercept-keymap-p scholia-forge-mode-map 'normal)))
+  (scholia-forge-test--with-pull
+    (should (evil-intercept-keymap-p scholia-forge-mode-map 'normal))
+    (with-temp-buffer
+      (scholia-forge-review-mode)
+      (should (evil-intercept-keymap-p scholia-forge-review-mode-map 'normal)))))
 
 (ert-deftest scholia-forge-reviews-in-a-buffer-of-their-own ()
   "The review buffer lists the drafts and submits them with its summary."

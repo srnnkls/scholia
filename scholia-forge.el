@@ -742,8 +742,10 @@ again after every refresh from the state that survives."
   "C-c C-o" #'scholia-forge-show-thread
   "C-c C-t" #'scholia-forge-visit-topic)
 
-(with-eval-after-load 'evil
-  (evil-make-intercept-map scholia-forge-mode-map 'normal))
+(defun scholia-forge--intercept (map)
+  "Put MAP ahead of the keys evil gives Magit in normal state, when evil is here."
+  (when (fboundp 'evil-make-intercept-map)
+    (evil-make-intercept-map map 'normal)))
 
 (defun scholia-forge--lighter ()
   "Return the mode line lighter saying how the pull request stands."
@@ -763,7 +765,9 @@ pull request's own until `scholia-forge-push' sends them to GitHub.
   :lighter (:eval (scholia-forge--lighter))
   :keymap scholia-forge-mode-map
   (if scholia-forge-mode
-      (add-hook 'magit-refresh-buffer-hook #'scholia-forge--refresh-hook)
+      (progn
+        (scholia-forge--intercept scholia-forge-mode-map)
+        (add-hook 'magit-refresh-buffer-hook #'scholia-forge--refresh-hook))
     (scholia-forge--undecorate)))
 (put 'scholia-forge-mode 'permanent-local t)
 
@@ -1161,10 +1165,8 @@ is dropped once GitHub has it, so what fails is still there to send."
 Submitting it sends the summary with every draft; cancelling leaves the
 drafts as they are.
 
-\{scholia-forge-review-mode-map}")
-
-(with-eval-after-load 'evil
-  (evil-make-intercept-map scholia-forge-review-mode-map 'normal))
+\\{scholia-forge-review-mode-map}"
+  (scholia-forge--intercept scholia-forge-review-mode-map))
 
 (defun scholia-forge--overview (drafts)
   "Return the overview of DRAFTS shown under a review's summary."
