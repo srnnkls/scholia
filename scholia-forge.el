@@ -37,7 +37,6 @@
 (declare-function forge-visit-topic "ext:forge-commands" (topic))
 
 (defvar forge-buffer-topic)
-(defvar forge-buffer-repository)
 
 
 ;;;; Customization
@@ -805,7 +804,6 @@ RANGE is the revision range the diff shows."
                             (scholia-forge--slot pullreq 'number)
                             range
                             (scholia-forge--slot pullreq 'title))
-      (setq-local forge-buffer-repository repository)
       (scholia-forge--put :topic pullreq)
       (scholia-forge--claim-topic))))
 
