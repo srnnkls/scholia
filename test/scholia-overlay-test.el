@@ -174,10 +174,8 @@ its terminator 23, line three 24-35 and its terminator 36.")
                            (12 18 "ghost-c")))))
       (should (equal (length (delete-dups (copy-sequence faces))) 3)))))
 
-(ert-deftest scholia-overlay-shows-a-note-as-a-pane-under-its-last-line ()
-  "A note is a bracketed pane on lines of its own under the chain's last line.
-It is drawn the way the field it was written in is, so writing a note
-and reading it back look the same."
+(ert-deftest scholia-overlay-shows-a-note-as-a-pane-beside-its-last-line ()
+  "A note is a pane beside the chain's last line, from the annotation column."
   (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
     (scholia-mode 1)
     (let* ((chain (scholia-create-chain 1 17 "across two lines"))
@@ -186,12 +184,35 @@ and reading it back look the same."
            (rendered (substring-no-properties (scholia-render-note chain))))
       (should (= 1 (length (scholia-render--notes))))
       (should (= (overlay-start overlay) 23))
-      (should (string-prefix-p "\n" rendered))
-      (should (string-match-p "╭ .*across two lines" rendered))
-      (should (string-match-p "╰ " rendered))
+      (should (equal rendered
+                     (concat (make-string (- scholia-annotation-column 11) ?\s)
+                             "across two lines")))
       (scholia-delete-chain (car chain))
       (should-not (scholia-render--notes))
       (should-not (overlay-buffer overlay)))))
+
+(ert-deftest scholia-overlay-gives-each-annotation-a-pane-of-its-own ()
+  "The note and each reply are panes of their own, wrapped beside the line.
+Rows wrapping carries on start at the annotation column, and a reply's
+rows go in further by its depth."
+  (scholia-test-with-temp-file-buffer _buffer "    (+ a b)\n"
+    (scholia-mode 1)
+    (cl-letf (((symbol-function 'cera--display-widths) (lambda () '((nil . 40))))
+              (scholia-annotation-column 12))
+      (let* ((chain (scholia-create-chain 5 12 "a note long enough to wrap twice"))
+             (key (overlay-get (car chain) 'scholia--chain-id)))
+        (setf (alist-get key scholia--replies)
+              (list (cons 1 (scholia-db-make-annotation
+                             "r1" "a reply long enough to wrap" nil nil nil))))
+        (scholia-render-chain chain)
+        (should (= 2 (length (cera-shown-panes (alist-get key scholia-render--shown)))))
+        (should (equal (split-string (substring-no-properties
+                                      (scholia-render-note chain))
+                                     "\n")
+                       '(" a note long enough to wrap"
+                         "            twice"
+                         "              a reply long enough to"
+                         "              wrap")))))))
 
 (ert-deftest scholia-overlay-tints-a-reply-below-the-note-it-answers ()
   (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
@@ -199,7 +220,8 @@ and reading it back look the same."
     (let* ((chain (scholia-create-chain 1 6 "the note"))
            (key (overlay-get (car chain) 'scholia--chain-id))
            (color (scholia-color-for-index 0)))
-      (setf (alist-get key scholia--replies) '((1 . "the answer")))
+      (setf (alist-get key scholia--replies)
+            (list (cons 1 (scholia-db-make-annotation "r1" "the answer" nil nil nil))))
       (scholia-render-chain chain)
       (let ((rendered (scholia-render-note chain)))
         (should (string-match-p (regexp-quote "the note") rendered))

@@ -315,6 +315,10 @@ covers no text, so it passes nil for BEG, END and ANNOTATED-TEXT."
   "Return the column within its line where ANNOTATION ends."
   (plist-get annotation :end-column))
 
+(defun scholia-db-annotation-author (annotation)
+  "Return who wrote ANNOTATION, or nil when that was not recorded."
+  (plist-get annotation :author))
+
 (defun scholia-db-annotation-revision (annotation)
   "Return the revision ANNOTATION describes, or nil for the working tree."
   (plist-get annotation :revision))

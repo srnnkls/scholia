@@ -39,6 +39,8 @@
 ;;;###autoload
 (autoload 'scholia-reply-to "scholia-core" nil t)
 ;;;###autoload
+(autoload 'scholia-toggle-annotation-authors "scholia-core" nil t)
+;;;###autoload
 (autoload 'scholia-goto-next-annotation "scholia-core" nil t)
 ;;;###autoload
 (autoload 'scholia-goto-previous-annotation "scholia-core" nil t)

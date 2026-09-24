@@ -214,6 +214,27 @@ Applied once per level of depth, so a reply to a reply fades twice."
   "Whether working-tree buffers show annotations made against revisions."
   :type 'boolean)
 
+(defcustom scholia-annotation-authors nil
+  "Whether annotations record and show who wrote them.
+When non-nil, a new annotation or reply stores its author, the git
+`user.name' and `user.email' of the buffer's repository, and every
+stored author is drawn in a pane of its own under what they wrote.
+Nil records and draws none.  `scholia-toggle-annotation-authors' flips
+it in every buffer."
+  :type 'boolean)
+
+(defcustom scholia-author-icon "nf-md-at"
+  "Nerd Font glyph drawn in front of an author, or nil for none."
+  :type '(choice (const :tag "None" nil) string))
+
+(defcustom scholia-author-icon-fallback "@"
+  "Character drawn in front of an author where the Nerd Font is missing."
+  :type '(choice (const :tag "None" nil) string))
+
+(defcustom scholia-annotation-column 85
+  "Column where annotation text starts."
+  :type 'natnum)
+
 (defcustom scholia-search-region-lines-delta 2
   "How many lines around its stored position annotated text is searched.
 Applies when a file changed while `scholia-mode' was off."
@@ -240,8 +261,9 @@ Kept for the record an annotation round-trips through; a session's colour
 is what draws it.")
 
 (defvar-local scholia--replies nil
-  "Alist mapping a chain id to the reply lines drawn under its note.
-Each entry is a list of conses of depth and text, in thread order.")
+  "Alist mapping a chain id to the replies drawn under its note.
+Each entry is a list of conses of a reply's depth and its annotation,
+in thread order.")
 
 (defvar-local scholia--unplaced-annotations nil
   "Stored annotations this buffer could not be shown holding.

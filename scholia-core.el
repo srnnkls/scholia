@@ -280,10 +280,29 @@ however often it is stored and whatever the edits in between."
                         beg end
                         (buffer-substring-no-properties beg end)
                         (scholia-chain-color-index chain)))
-           (revision (overlay-get (car chain) 'scholia-core--revision)))
+           (revision (overlay-get (car chain) 'scholia-core--revision))
+           (author (get (overlay-get (car chain) 'scholia--chain-id)
+                        'scholia-author))
+           (annotation (if author
+                           (scholia-db--with-fields annotation :author author)
+                         annotation)))
       (if revision
           (scholia-db--with-fields annotation :revision revision)
         annotation))))
+
+(defun scholia-core--author ()
+  "Return who is annotating, as the git user of this buffer's repository.
+The name and email come from `git config', falling back to the
+variables `user-full-name' and `user-mail-address' where git has none,
+and nil comes back when neither says who."
+  (let* ((config (lambda (key)
+                   (ignore-errors
+                     (car (process-lines-ignore-status "git" "config" key)))))
+         (name (or (funcall config "user.name")
+                   (and (not (string-empty-p user-full-name)) user-full-name)))
+         (email (or (funcall config "user.email") user-mail-address)))
+    (cond ((and name email) (format "%s <%s>" name email))
+          ((or name email)))))
 
 (defun scholia-core--buffer-annotations (&optional owner)
   "Return one annotation per chain, optionally restricted to OWNER."
@@ -308,6 +327,9 @@ however often it is stored and whatever the edits in between."
       (put (overlay-get (car chain) 'scholia--chain-id)
            'scholia-core--id
            (scholia-db-annotation-id annotation))
+      (put (overlay-get (car chain) 'scholia--chain-id)
+           'scholia-author
+           (scholia-db-annotation-author annotation))
       (when-let* ((revision (scholia-db-annotation-revision annotation)))
         (overlay-put (car chain) 'scholia-core--revision revision)
         (scholia-render-chain chain))
@@ -587,21 +609,17 @@ way.  Only the notes whose state changed are drawn again."
                              (equal (scholia-db-annotation-id candidate) id))
                            annotations)))
       (when root
-        (let ((lines
-               (apply
-                #'append
-                (scholia-thread-walk
-                 (cons root (seq-filter #'scholia-db-annotation-reply-p
-                                        annotations))
-                 (lambda (annotation depth)
-                   (unless (zerop depth)
-                     (mapcar (lambda (line) (cons depth line))
-                             (split-string
-                              (scholia-db-annotation-text annotation)
-                              "\n"))))))))
+        (let ((replies
+               (delq nil
+                     (scholia-thread-walk
+                      (cons root (seq-filter #'scholia-db-annotation-reply-p
+                                             annotations))
+                      (lambda (annotation depth)
+                        (unless (zerop depth)
+                          (cons depth annotation)))))))
           (setf (alist-get (overlay-get (car chain) 'scholia--chain-id)
                            scholia--replies)
-                lines)
+                replies)
           (scholia-render-chain chain))))))
 
 (defvar scholia-core--visibility-restored nil
@@ -706,7 +724,11 @@ holds no text on any line, or when the note read is empty."
           (require 'scholia)
           (scholia-mode 1))
         (scholia-core--session-state owner)
-        (scholia-create-chain (car bounds) (cdr bounds) note nil owner)
+        (let ((chain (scholia-create-chain (car bounds) (cdr bounds) note nil owner)))
+          (when (and chain scholia-annotation-authors)
+            (put (overlay-get (car chain) 'scholia--chain-id)
+                 'scholia-author (scholia-core--author))
+            (scholia-render-chain chain)))
         (deactivate-mark)
         (when (and (not text) (eq scholia-annotation-editor 'inline))
           (scholia-save-annotations))))))))
@@ -801,26 +823,82 @@ The inline editor stores the change after removing its temporary field."
             (scholia-save-annotations))))
     (scholia-core--report "No annotation at point")))
 
-(defun scholia-reply-to (&optional text)
-  "Store a reply with TEXT under the selected annotation at point."
+(defun scholia-core--read-parent (chain)
+  "Return the id of what a reply under CHAIN answers.
+It is asked for once CHAIN has replies: the annotation itself is offered
+first, then each reply in thread order, set in by its depth."
+  (let ((replies (alist-get (overlay-get (car chain) 'scholia--chain-id)
+                            scholia--replies))
+        (root (scholia-core--chain-id chain)))
+    (if (null replies)
+        root
+      (let* ((candidates
+              (cons (cons (overlay-get (car chain) 'scholia-annotation) root)
+                    (mapcar (pcase-lambda (`(,depth . ,reply))
+                              (cons (concat (make-string (* 2 depth) ?\s)
+                                            (scholia-db-annotation-text reply))
+                                    (scholia-db-annotation-id reply)))
+                            replies)))
+             (choice (completing-read "Reply to: " candidates nil t nil nil
+                                      (caar candidates))))
+        (cdr (assoc choice candidates))))))
+
+(defun scholia-core--thread-insert (replies parent reply)
+  "Return REPLIES with REPLY placed as the last answer to PARENT.
+REPLIES are conses of depth and annotation in thread order; a PARENT
+none of them carries is the annotation they hang off."
+  (let* ((at (seq-position replies parent
+                           (lambda (entry id)
+                             (equal (scholia-db-annotation-id (cdr entry)) id))))
+         (depth (if at (car (nth at replies)) 0))
+         (end (if at
+                  (let ((index (1+ at)))
+                    (while (and (< index (length replies))
+                                (> (car (nth index replies)) depth))
+                      (setq index (1+ index)))
+                    index)
+                (length replies))))
+    (append (seq-take replies end)
+            (list (cons (1+ depth) reply))
+            (seq-drop replies end))))
+
+(defun scholia-reply-to (&optional text parent)
+  "Store a reply with TEXT under the selected annotation at point.
+PARENT is the id of the annotation or reply it answers.  Interactively,
+once the annotation has replies, it is read with completion; with none,
+the reply answers the annotation."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
-      (let ((owner (scholia-chain-owner chain))
-            (note (or text (read-string "Reply: "))))
+      (let* ((owner (scholia-chain-owner chain))
+             (parent (or parent (scholia-core--read-parent chain)))
+             (note (or text (read-string "Reply: ")))
+             (reply (scholia-db-make-annotation
+                     (scholia-core--make-id) note
+                     nil nil nil nil nil parent))
+             (reply (if scholia-annotation-authors
+                        (scholia-db--with-fields reply :author (scholia-core--author))
+                      reply)))
         (scholia-core--store
-         (append (scholia-core--buffer-annotations owner)
-                 (list (scholia-db-make-annotation
-                        (scholia-core--make-id) note
-                        nil nil nil nil nil
-                        (scholia-core--chain-id chain))))
+         (append (scholia-core--buffer-annotations owner) (list reply))
          owner)
         (let ((key (overlay-get (car chain) 'scholia--chain-id)))
           (setf (alist-get key scholia--replies)
-                (append (alist-get key scholia--replies)
-                        (mapcar (lambda (line) (cons 1 line))
-                                (split-string note "\n")))))
+                (scholia-core--thread-insert
+                 (alist-get key scholia--replies) parent reply)))
         (scholia-render-chain chain))
     (scholia-core--report "No annotation at point")))
+
+(defun scholia-toggle-annotation-authors ()
+  "Turn recording and showing annotation authors on or off everywhere.
+Every buffer showing annotations is drawn again to match."
+  (interactive)
+  (setq scholia-annotation-authors (not scholia-annotation-authors))
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'scholia-mode buffer)
+      (with-current-buffer buffer
+        (mapc #'scholia-render-chain (scholia-buffer-chains)))))
+  (scholia-core--report "Annotation authors %s"
+                        (if scholia-annotation-authors "on" "off")))
 
 (defun scholia-goto-next-annotation ()
   "Move point to the annotation after it, staying put when there is none."

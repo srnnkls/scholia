@@ -90,12 +90,15 @@ Customize `scholia-edit-body` and `scholia-edit-border` for the input's appearan
 
 ### How annotations appear
 
-An annotated range is underlined in its session's colour, and the note is drawn on lines of
-its own under the last line it covers, bracketed and marked like the field it was written
-in and wrapping at the window edge. Editing a note opens the field in its place. Replies
+An annotated range is underlined in its session's colour, and the note is drawn beside the
+last line it covers, starting at `scholia-annotation-column` and wrapping at the window
+edge. A note steps aside while the field editing it is open. Replies
 are drawn under the note, set in by `scholia-render-reply-indent` columns per
 level and losing `scholia-reply-tint-step` of the colour's saturation at each, so a thread
-reads as one hue fading inwards. Nothing is written to the buffer: the file is untouched,
+reads as one hue fading inwards. With `scholia-annotation-authors` on, new annotations and
+replies record their author (the repository's git `user.name` and `user.email`), and each
+stored author is drawn under what they wrote; `scholia-toggle-annotation-authors` flips it
+everywhere. Nothing is written to the buffer: the file is untouched,
 the modified flag is unmoved, and undo never sees a note.
 
 ### Sessions

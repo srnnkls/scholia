@@ -116,21 +116,35 @@ ordinary filename completion relative to DIRECTORY."
               (family (bound-and-true-p nerd-icons-font-family)))
     (find-font (font-spec :family family))))
 
+(defun scholia-edit--centred (glyph)
+  "Return GLYPH raised to sit centred on the line rather than on its baseline.
+A glyph drawn at `scholia-edit-icon-height' of the text around it gives
+up the rest of the line's height above itself; raising it by half of
+that, in its own height, is what centres it."
+  (let ((height scholia-edit-icon-height))
+    (if (< 0 height 1)
+        (propertize glyph 'display `(raise ,(/ (- 1.0 height) (* 2 height))))
+      glyph)))
+
+(defun scholia-edit-glyph (name fallback &optional color)
+  "Return the Nerd Font glyph NAME, or FALLBACK where the font is missing.
+The glyph is drawn at `scholia-edit-icon-height' in COLOR and centred on
+the line, and nil comes back for a nil NAME or a FALLBACK the frame
+cannot display."
+  (let ((face (and color (list :foreground color))))
+    (when name
+      (if (scholia-edit--nerd-font-p)
+          (scholia-edit--centred
+           (nerd-icons-mdicon name :face face :height scholia-edit-icon-height))
+        (when (and fallback (char-displayable-p (string-to-char fallback)))
+          (propertize fallback 'face face))))))
+
 (defun scholia-edit--icon (color)
   "Return the glyph drawn in front of the field in COLOR, or nil for none.
 The Nerd Font glyph where that font is installed and a plain quotation
 mark where it is not, so a frame without the font marks the field rather
 than drawing a box for a character it has no glyph for."
-  (when scholia-edit-icon
-    (if (scholia-edit--nerd-font-p)
-        (nerd-icons-mdicon scholia-edit-icon
-                           :face (list :foreground color)
-                           :height scholia-edit-icon-height)
-      (when (and scholia-edit-icon-fallback
-                 (char-displayable-p
-                  (string-to-char scholia-edit-icon-fallback)))
-        (propertize scholia-edit-icon-fallback
-                    'face (list :foreground color))))))
+  (scholia-edit-glyph scholia-edit-icon scholia-edit-icon-fallback color))
 
 (defun scholia-edit-read (table &optional initial bounds)
   "Read annotation text inline using completion TABLE and INITIAL input.

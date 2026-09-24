@@ -11,8 +11,9 @@
 
 ;;; Commentary:
 
-;; A chain's note is a read-only `cera' pane shown under the chain's last
-;; line, bracketed and marked the way the field it was written in is.
+;; A chain's note is a read-only `cera' pane shown beside the chain's
+;; last line, from `scholia-annotation-column' on, with each reply a pane
+;; of its own under it.
 ;; Nothing is written to the buffer, so an annotated file stays untouched
 ;; and undo never sees a note.
 
@@ -22,6 +23,7 @@
 (require 'cera)
 (require 'scholia-vars)
 (require 'scholia-color)
+(require 'scholia-db)
 (require 'scholia-edit)
 
 (defvar-local scholia-render--shown nil
@@ -37,45 +39,62 @@
 
 ;;;; Laying out the text
 
-(defun scholia-render--reply-text (chain-id color)
-  "Return the replies stored under CHAIN-ID as the text drawn below the note.
-COLOR is the owning session's colour.  Each reply is set in by its depth
-and wears that depth's tint of COLOR."
-  (mapconcat
-   (pcase-lambda (`(,depth . ,text))
-     (propertize (concat (make-string (* depth scholia-render-reply-indent) ?\s)
-                         text)
-                 'face (scholia-color-note-face color depth)))
-   (alist-get chain-id scholia--replies)
-   "\n"))
+(defun scholia-render--author-pane (id author indent)
+  "Return the pane ID naming AUTHOR, set in by INDENT, or nil for none.
+It carries no face, so it reads as a byline under what was written
+rather than as more of it."
+  (when (and scholia-annotation-authors author)
+    (cera-pane :id id :kind 'readonly :bracket nil :indent indent
+               :text (concat (when-let* ((glyph (scholia-edit-glyph
+                                                 scholia-author-icon
+                                                 scholia-author-icon-fallback)))
+                               (concat glyph " "))
+                             author))))
 
-(defun scholia-render--pane (chain)
-  "Return the pane showing CHAIN's note and the replies under it."
+(defun scholia-render--panes (chain)
+  "Return the panes showing CHAIN's note and each reply under it.
+A reply is set in by `scholia-render-reply-indent' columns per level,
+and each of them is followed by a pane naming its author while
+`scholia-annotation-authors' is on."
   (let* ((head (car chain))
          (chain-id (overlay-get head 'scholia--chain-id))
          (color (scholia-render-color (overlay-get head 'scholia--owner)
                                       chain-id))
-         (revision (overlay-get head 'scholia-core--revision))
-         (note (propertize (concat (overlay-get head 'scholia-annotation)
-                                   (and revision (format " [%s]" revision)))
-                           'face (scholia-color-note-face color 0)))
-         (replies (scholia-render--reply-text chain-id color)))
-    (cera-pane :id chain-id :kind 'readonly
-               :text (if (string-empty-p replies) note (concat note "\n" replies))
-               :prefix (scholia-edit--icon color)
-               :prefix-position 'top)))
+         (revision (overlay-get head 'scholia-core--revision)))
+    (delq nil
+          (append
+           (list (cera-pane :id chain-id :kind 'readonly :bracket nil
+                            :face (scholia-color-note-face color 0)
+                            :text (concat (overlay-get head 'scholia-annotation)
+                                          (and revision (format " [%s]" revision))))
+                 (scholia-render--author-pane (cons chain-id 'author)
+                                              (get chain-id 'scholia-author) 0))
+           (apply
+            #'append
+            (seq-map-indexed
+             (pcase-lambda (`(,depth . ,reply) index)
+               (let ((indent (* depth scholia-render-reply-indent)))
+                 (list (cera-pane :id (cons chain-id index) :kind 'readonly
+                                  :bracket nil :indent indent
+                                  :face (scholia-color-note-face color depth)
+                                  :text (scholia-db-annotation-text reply))
+                       (scholia-render--author-pane
+                        (list chain-id index 'author)
+                        (scholia-db-annotation-author reply) indent))))
+             (alist-get chain-id scholia--replies)))))))
 
 
 ;;;; Drawing
 
 (defun scholia-render-chain (chain)
-  "Show CHAIN's note under the last line it covers, replacing any shown.
+  "Show CHAIN's note beside the last line it covers, replacing any shown.
 Return the shown note, or nil for an empty CHAIN."
   (when chain
     (let ((chain-id (overlay-get (car chain) 'scholia--chain-id)))
       (scholia-render-forget chain-id)
-      (let ((shown (cera-pane-show (list (scholia-render--pane chain))
-                                   (overlay-end (car (last chain))))))
+      (let ((shown (cera-pane-show (scholia-render--panes chain)
+                                   (overlay-end (car (last chain)))
+                                   scholia-annotation-column)))
         (push (cons chain-id shown) scholia-render--shown)
         shown))))
 
@@ -84,7 +103,8 @@ Return the shown note, or nil for an empty CHAIN."
   (when-let* ((shown (alist-get (overlay-get (car chain) 'scholia--chain-id)
                                 scholia-render--shown))
               (overlay (car (cera-shown-overlays shown))))
-    (overlay-get overlay 'before-string)))
+    (or (overlay-get overlay 'before-string)
+        (overlay-get overlay 'after-string))))
 
 (defun scholia-render-forget (chain-id)
   "Remove the note shown for CHAIN-ID."
