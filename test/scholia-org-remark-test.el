@@ -211,7 +211,7 @@ Interactive replacement asks before it overwrites that existing notes file."
                 (should (equal (buffer-string) "unsaved notes\n"))
                 (should (buffer-modified-p))
                 (should-not (verify-visited-file-modtime))
-                (should (equal buffer-file-truename (file-truename notes)))
+                (should (equal buffer-file-truename (abbreviate-file-name (file-truename notes))))
                 (should (eq notes-buffer
                             (find-buffer-visiting buffer-file-truename))))
               (should-not (get-file-buffer equivalent-notes))
