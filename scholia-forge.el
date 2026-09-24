@@ -777,8 +777,7 @@ RANGE is the revision range the diff shows."
          (magit-generate-buffer-name-function (lambda (_mode _value) name))
          (magit-display-buffer-function (or scholia-forge-display-buffer-function
                                             magit-display-buffer-function)))
-    (magit-diff-setup-buffer range nil nil nil 'committed t)
-    (with-current-buffer (get-buffer name)
+    (with-current-buffer (magit-diff-setup-buffer range nil nil nil 'committed t)
       (setq scholia-forge--state
             (list :host host :owner owner :repo repo :number number
                   :title title

@@ -375,5 +375,17 @@ b.txt has a line added."
         (should (equal (plist-get (car (car (get id 'scholia-forge-threads))) :text)
                        "first line\nsecond line"))))))
 
+(ert-deftest scholia-forge-decorates-the-buffer-magit-set-up ()
+  "A stray buffer under the pull request's name does not take its threads."
+  (let ((stray (get-buffer-create "*magit-diff: owner/repo #42 The title*")))
+    (unwind-protect
+        (scholia-forge-test--with-pull
+          (should-not (eq (current-buffer) stray))
+          (should (derived-mode-p 'magit-diff-mode))
+          (should scholia-forge-mode)
+          (should (scholia-buffer-chains))
+          (should-not (buffer-local-value 'scholia-forge-mode stray)))
+      (kill-buffer stray))))
+
 (provide 'scholia-forge-test)
 ;;; scholia-forge-test.el ends here
