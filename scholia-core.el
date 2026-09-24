@@ -558,20 +558,6 @@ naming the session itself still gets the signal from
             scholia--unplaced-annotations
             (scholia-core--state-get session :unplaced)))))
 
-(defun scholia-core--redraw-buffer (&rest _)
-  "Draw every chain's note again, fitting it to the window it is shown in."
-  (dolist (chain (scholia-buffer-chains))
-    (scholia-render-chain chain)))
-
-(defun scholia-core--watch-window-size ()
-  "Redraw this buffer's notes whenever the window showing it is resized."
-  (add-hook 'window-size-change-functions #'scholia-core--redraw-buffer nil t))
-
-(defun scholia-core--unwatch-window-size ()
-  "Stop redrawing this buffer's notes when its window is resized."
-  (remove-hook 'window-size-change-functions
-               #'scholia-core--redraw-buffer t))
-
 (defun scholia-core--emphasize-at-point (&rest _)
   "Draw the note of every annotation point is in as the one it is in.
 An overlap leaves point in more than one, and each note is drawn that
@@ -638,7 +624,6 @@ hidden during a sitting is not brought back by the next buffer opened.")
   "Render every effective session and arm saving for this buffer."
   (scholia-core--restore-visibility-once)
   (scholia-core--fall-back-to-default)
-  (scholia-core--watch-window-size)
   (scholia-core--watch-point)
   (add-hook 'kill-buffer-hook #'scholia-core--save-on-kill nil t)
   (add-hook 'kill-emacs-hook #'scholia-core--save-all)
@@ -673,7 +658,6 @@ only once no annotated buffer is left to need it."
   (scholia-render-clear)
   (scholia-render-emphasis-clear)
   (scholia-disarm-rechaining)
-  (scholia-core--unwatch-window-size)
   (scholia-core--unwatch-point)
   (setq scholia--session-state nil
         scholia--replies nil
@@ -786,6 +770,22 @@ editor stores annotations after accepting input and removing its field."
         (mapc #'delete-overlay chain))
     (scholia-core--report "No annotation at point")))
 
+(defun scholia-core--read-over (chain)
+  "Read a new note for CHAIN, starting from the one it holds.
+The inline field opens on the lines CHAIN's note is shown on, so the
+note steps aside while it is open and comes back however it closes."
+  (require 'scholia-ui)
+  (let ((inline (eq scholia-annotation-editor 'inline)))
+    (when inline
+      (scholia-render-forget (overlay-get (car chain) 'scholia--chain-id)))
+    (unwind-protect
+        (scholia-ui-read-annotation
+         (overlay-get (car chain) 'scholia-annotation)
+         (cons (overlay-start (car chain))
+               (overlay-end (car (last chain)))))
+      (when inline
+        (scholia-render-chain chain)))))
+
 (defun scholia-edit-annotation (&optional text)
   "Replace the selected annotation at point with TEXT.
 Without TEXT, use `scholia-annotation-editor' with the existing note as
@@ -793,13 +793,7 @@ initial input.  Preserve its owner, bounds, identity, color, and replies.
 The inline editor stores the change after removing its temporary field."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
-      (let ((note (or text
-                      (progn
-                        (require 'scholia-ui)
-                        (scholia-ui-read-annotation
-                         (overlay-get (car chain) 'scholia-annotation)
-                         (cons (overlay-start (car chain))
-                               (overlay-end (car (last chain)))))))))
+      (let ((note (or text (scholia-core--read-over chain))))
         (if (string-empty-p note)
             (scholia-core--report "Annotation text is empty")
           (scholia-set-chain-text chain note)

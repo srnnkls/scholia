@@ -174,22 +174,24 @@ its terminator 23, line three 24-35 and its terminator 36.")
                            (12 18 "ghost-c")))))
       (should (equal (length (delete-dups (copy-sequence faces))) 3)))))
 
-(ert-deftest scholia-overlay-the-run-before-a-note-leaves-the-line-visible ()
-  "The run between a line and the note beside it carries no face.
-That run is drawn as part of the note's string rather than as buffer
-text, so a face there paints over whatever the line itself wears — a
-note beside a magit diff line would lay the frame's background across
-the diff.  The runs opening the note's own lower lines keep their face,
-since display-only lines have nothing behind them."
-  (let* ((lines (list (cons "one" '(:background "red"))
-                      (cons "two" '(:background "red"))))
-         (rendered (scholia-render--string lines 4))
-         (note-start (- scholia-annotation-column 4)))
-    (should-not (get-text-property 0 'face rendered))
-    (should (equal '(:background "red")
-                   (get-text-property note-start 'face rendered)))
-    (should (eq 'scholia-prefix
-                (get-text-property (+ note-start 3) 'face rendered)))))
+(ert-deftest scholia-overlay-shows-a-note-as-a-pane-under-its-last-line ()
+  "A note is a bracketed pane on lines of its own under the chain's last line.
+It is drawn the way the field it was written in is, so writing a note
+and reading it back look the same."
+  (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines
+    (scholia-mode 1)
+    (let* ((chain (scholia-create-chain 1 17 "across two lines"))
+           (shown (car (scholia-render--notes)))
+           (overlay (car (cera-shown-overlays shown)))
+           (rendered (substring-no-properties (scholia-render-note chain))))
+      (should (= 1 (length (scholia-render--notes))))
+      (should (= (overlay-start overlay) 23))
+      (should (string-prefix-p "\n" rendered))
+      (should (string-match-p "╭ .*across two lines" rendered))
+      (should (string-match-p "╰ " rendered))
+      (scholia-delete-chain (car chain))
+      (should-not (scholia-render--notes))
+      (should-not (overlay-buffer overlay)))))
 
 (ert-deftest scholia-overlay-tints-a-reply-below-the-note-it-answers ()
   (scholia-test-with-temp-file-buffer _buffer scholia-overlay-test--three-lines

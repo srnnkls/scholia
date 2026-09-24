@@ -206,12 +206,6 @@ Applied once per level of depth, so a reply to a reply fades twice."
   "Maximum number of bytes retained in a complete source snapshot."
   :type 'natnum)
 
-(defface scholia-prefix
-  '((t (:inherit default)))
-  "Face of the runs opening the note lines below an annotated line.
-The run between the line and the note it is drawn beside is left
-unfaced, so whatever that line wears still shows through it.")
-
 (defcustom scholia-use-messages t
   "Whether scholia reports what it did in the echo area."
   :type 'boolean)
@@ -219,10 +213,6 @@ unfaced, so whatever that line wears still shows through it.")
 (defcustom scholia-show-revision-annotations nil
   "Whether working-tree buffers show annotations made against revisions."
   :type 'boolean)
-
-(defcustom scholia-annotation-column 85
-  "Column where annotation text starts."
-  :type 'natnum)
 
 (defcustom scholia-search-region-lines-delta 2
   "How many lines around its stored position annotated text is searched.

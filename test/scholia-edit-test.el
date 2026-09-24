@@ -320,4 +320,27 @@ fallback character is given nothing rather than a box."
     (let ((scholia-edit-icon nil))
       (should-not (scholia-edit--icon color)))))
 
+(ert-deftest scholia-edit-existing-note-gives-way-to-the-field ()
+  "The note steps aside while its field is open and comes back on cancel."
+  (scholia-test-with-session-directory
+    (scholia-test-with-temp-file-buffer _buffer "alpha"
+      (let ((scholia-project-root-function (lambda () nil))
+            (scholia-autosave nil)
+            (scholia-annotation-editor 'inline)
+            (scholia-session "inline"))
+        (scholia-mode 1)
+        (goto-char 1)
+        (scholia-annotate "old note")
+        (let ((chain (scholia-core--select-chain)))
+          (scholia-edit-test--reading
+              (lambda ()
+                (should-not (scholia-render-note chain))
+                (cera-cancel))
+            (should (eq 'quit
+                        (condition-case nil
+                            (call-interactively #'scholia-edit-annotation)
+                          (quit 'quit)))))
+          (should (string-match-p (regexp-quote "old note")
+                                  (scholia-render-note chain))))))))
+
 (provide 'scholia-edit-test)

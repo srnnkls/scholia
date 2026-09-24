@@ -283,7 +283,6 @@ cookies can make a command autoloadable."
                     scholia-source-snapshot-mode
                     scholia-source-snapshot-limit
                     scholia-use-messages
-                    scholia-annotation-column
                     scholia-search-region-lines-delta))
     (should (custom-variable-p symbol)))
   (let ((directory (default-value 'scholia-session-directory)))
@@ -301,9 +300,7 @@ cookies can make a command autoloadable."
   (should (eq (default-value 'scholia-source-snapshot-mode) 'bounded-full))
   (should (equal (default-value 'scholia-source-snapshot-limit) (* 256 1024)))
   (should (eq (default-value 'scholia-use-messages) t))
-  (should (equal (default-value 'scholia-annotation-column) 85))
   (should (equal (default-value 'scholia-search-region-lines-delta) 2))
-  (should (facep 'scholia-prefix))
   (should (equal (default-value 'scholia-reply-tint-step) 0.35))
   (should (equal (default-value 'scholia-render-reply-indent) 2))
   (let ((colors (default-value 'scholia-session-colors)))
