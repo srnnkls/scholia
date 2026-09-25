@@ -131,7 +131,10 @@ the note steps aside while the field is open and returns however the field close
 `scholia-delete-annotation` (`C-c C-d`) deletes the annotation at point and its note.
 
 When point is in several annotations, both commands ask which one you mean, showing each
-candidate's session, text and id.
+candidate's session, text and id. Once the annotation has replies, they ask which part of the
+thread they act on, the way `scholia-reply-to` asks what a reply answers: the annotation itself,
+offered first, or any reply, indented by its depth. Editing a reply opens it with its own text and
+keeps its place in the thread; deleting one takes the replies under it with it.
 
 ## Replies and threads
 
