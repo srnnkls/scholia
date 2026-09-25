@@ -798,35 +798,55 @@ reply with the replies under it."
           (scholia-core--delete-reply chain target)))
     (scholia-core--report "No annotation at point")))
 
-(defun scholia-core--read-over (chain)
-  "Read a new note for CHAIN, starting from the one it holds.
-The inline field opens on the lines CHAIN's note is shown on, so the
-note steps aside while it is open and comes back however it closes."
+(defun scholia-core--read-over (chain &optional initial)
+  "Read a new text for CHAIN's thread, starting from INITIAL.
+INITIAL defaults to CHAIN's own note.  The inline field opens on the
+lines CHAIN's note is shown on, so the note steps aside while it is
+open and comes back however it closes."
   (require 'scholia-ui)
   (let ((inline (eq scholia-annotation-editor 'inline)))
     (when inline
       (scholia-render-forget (overlay-get (car chain) 'scholia--chain-id)))
     (unwind-protect
         (scholia-ui-read-annotation
-         (overlay-get (car chain) 'scholia-annotation)
+         (or initial (overlay-get (car chain) 'scholia-annotation))
          (cons (overlay-start (car chain))
                (overlay-end (car (last chain)))))
       (when inline
         (scholia-render-chain chain)))))
 
-(defun scholia-edit-annotation (&optional text)
-  "Replace the selected annotation at point with TEXT.
-Without TEXT, use `scholia-annotation-editor' with the existing note as
-initial input.  Preserve its owner, bounds, identity, color, and replies.
-The inline editor stores the change after removing its temporary field."
+(defun scholia-edit-annotation (&optional text target)
+  "Replace the text of the selected annotation at point with TEXT.
+TARGET is the id of the annotation or reply of its thread to change,
+asked for as `scholia-reply-to' asks what it answers once the annotation
+has replies; without replies, or with TEXT from Lisp, it is the
+annotation.  Without TEXT, use `scholia-annotation-editor' with the
+existing text as initial input.  Preserve owner, bounds, identity,
+colour and replies.  The inline editor stores the change after removing
+its temporary field."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
-      (let ((note (or text (scholia-core--read-over chain))))
-        (if (string-empty-p note)
-            (scholia-core--report "Annotation text is empty")
+      (let* ((root (scholia-core--chain-id chain))
+             (target (or target
+                         (if text root (scholia-core--read-in-thread chain "Edit: "))))
+             (reply (unless (equal target root)
+                      (seq-find (lambda (annotation)
+                                  (equal (scholia-db-annotation-id annotation) target))
+                                (mapcar #'cdr (alist-get (overlay-get (car chain)
+                                                                      'scholia--chain-id)
+                                                         scholia--replies)))))
+             (note (or text
+                       (scholia-core--read-over
+                        chain (and reply (scholia-db-annotation-text reply))))))
+        (cond
+         ((string-empty-p note)
+          (scholia-core--report "Annotation text is empty"))
+         (reply
+          (scholia-core--edit-reply chain target note))
+         (t
           (scholia-set-chain-text chain note)
           (when (and (not text) (eq scholia-annotation-editor 'inline))
-            (scholia-save-annotations))))
+            (scholia-save-annotations)))))
     (scholia-core--report "No annotation at point")))
 
 (defun scholia-core--read-in-thread (chain prompt)
@@ -870,17 +890,41 @@ answer is a cons of the ids taken out and the replies left."
                     (seq-subseq replies at end))
             (append (seq-take replies at) (seq-drop replies end))))))
 
+(defun scholia-core--chain-record (chain)
+  "Return the session file and the record key CHAIN's thread is stored under."
+  (cons (scholia-session-file (or (scholia-chain-owner chain) (scholia-session-name)))
+        (scholia-locate-location-source-id
+         (scholia-locate-source 'capture (overlay-start (car chain))))))
+
 (defun scholia-core--delete-reply (chain id)
   "Delete the reply ID under CHAIN, and the replies under it, from its session."
   (let* ((key (overlay-get (car chain) 'scholia--chain-id))
          (removal (scholia-core--thread-remove (alist-get key scholia--replies) id))
-         (session-file (scholia-session-file
-                        (or (scholia-chain-owner chain) (scholia-session-name))))
-         (source (scholia-locate-location-source-id
-                  (scholia-locate-source 'capture (overlay-start (car chain))))))
+         (record (scholia-core--chain-record chain)))
     (dolist (removed (car removal))
-      (scholia-db-remove-annotation session-file source removed))
+      (scholia-db-remove-annotation (car record) (cdr record) removed))
     (setf (alist-get key scholia--replies) (cdr removal))
+    (scholia-render-chain chain)))
+
+(defun scholia-core--edit-reply (chain id text)
+  "Make TEXT what the reply ID under CHAIN says, in the buffer and its session.
+The reply keeps its place in the thread and in its record."
+  (let* ((key (overlay-get (car chain) 'scholia--chain-id))
+         (record (scholia-core--chain-record chain))
+         (stored (scholia-db-record (car record) (cdr record)))
+         (rewrite (lambda (annotation)
+                    (if (equal (scholia-db-annotation-id annotation) id)
+                        (plist-put (copy-sequence annotation) :text text)
+                      annotation))))
+    (when stored
+      (scholia-db-store-record
+       (car record)
+       (scholia-db-make-record (cdr record)
+                               (mapcar rewrite (scholia-db-record-annotations stored))
+                               (scholia-db-record-checksum stored))))
+    (setf (alist-get key scholia--replies)
+          (mapcar (lambda (entry) (cons (car entry) (funcall rewrite (cdr entry))))
+                  (alist-get key scholia--replies)))
     (scholia-render-chain chain)))
 
 (defun scholia-core--thread-insert (replies parent reply)
