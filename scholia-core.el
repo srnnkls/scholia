@@ -784,12 +784,18 @@ editor stores annotations after accepting input and removing its field."
         (cdr (assoc-string selected candidates)))))))
 
 (defun scholia-delete-annotation ()
-  "Delete the selected annotation at point and the note drawn for it."
+  "Delete the selected annotation at point and the note drawn for it.
+Once the annotation has replies, which of them goes is asked for as
+`scholia-reply-to' asks what it answers: the annotation itself, or one
+reply with the replies under it."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
-      (progn
-        (scholia-render-forget (overlay-get (car chain) 'scholia--chain-id))
-        (mapc #'delete-overlay chain))
+      (let ((target (scholia-core--read-in-thread chain "Delete: ")))
+        (if (equal target (scholia-core--chain-id chain))
+            (progn
+              (scholia-render-forget (overlay-get (car chain) 'scholia--chain-id))
+              (mapc #'delete-overlay chain))
+          (scholia-core--delete-reply chain target)))
     (scholia-core--report "No annotation at point")))
 
 (defun scholia-core--read-over (chain)
@@ -823,10 +829,11 @@ The inline editor stores the change after removing its temporary field."
             (scholia-save-annotations))))
     (scholia-core--report "No annotation at point")))
 
-(defun scholia-core--read-parent (chain)
-  "Return the id of what a reply under CHAIN answers.
-It is asked for once CHAIN has replies: the annotation itself is offered
-first, then each reply in thread order, set in by its depth."
+(defun scholia-core--read-in-thread (chain prompt)
+  "Return the id of the annotation of CHAIN's thread a command acts on.
+It is asked for with PROMPT once CHAIN has replies: the annotation
+itself is offered first, then each reply in thread order, set in by its
+depth.  With no replies the annotation is the only one there is."
   (let ((replies (alist-get (overlay-get (car chain) 'scholia--chain-id)
                             scholia--replies))
         (root (scholia-core--chain-id chain)))
@@ -839,9 +846,42 @@ first, then each reply in thread order, set in by its depth."
                                             (scholia-db-annotation-text reply))
                                     (scholia-db-annotation-id reply)))
                             replies)))
-             (choice (completing-read "Reply to: " candidates nil t nil nil
+             (choice (completing-read prompt candidates nil t nil nil
                                       (caar candidates))))
         (cdr (assoc choice candidates))))))
+
+(defun scholia-core--thread-remove (replies id)
+  "Return REPLIES without the reply ID and the replies under it.
+REPLIES are conses of depth and annotation in thread order.  The
+answer is a cons of the ids taken out and the replies left."
+  (let* ((at (seq-position replies id
+                           (lambda (entry id)
+                             (equal (scholia-db-annotation-id (cdr entry)) id))))
+         (depth (and at (car (nth at replies))))
+         (end (and at
+                   (let ((index (1+ at)))
+                     (while (and (< index (length replies))
+                                 (> (car (nth index replies)) depth))
+                       (setq index (1+ index)))
+                     index))))
+    (if (null at)
+        (cons nil replies)
+      (cons (mapcar (lambda (entry) (scholia-db-annotation-id (cdr entry)))
+                    (seq-subseq replies at end))
+            (append (seq-take replies at) (seq-drop replies end))))))
+
+(defun scholia-core--delete-reply (chain id)
+  "Delete the reply ID under CHAIN, and the replies under it, from its session."
+  (let* ((key (overlay-get (car chain) 'scholia--chain-id))
+         (removal (scholia-core--thread-remove (alist-get key scholia--replies) id))
+         (session-file (scholia-session-file
+                        (or (scholia-chain-owner chain) (scholia-session-name))))
+         (source (scholia-locate-location-source-id
+                  (scholia-locate-source 'capture (overlay-start (car chain))))))
+    (dolist (removed (car removal))
+      (scholia-db-remove-annotation session-file source removed))
+    (setf (alist-get key scholia--replies) (cdr removal))
+    (scholia-render-chain chain)))
 
 (defun scholia-core--thread-insert (replies parent reply)
   "Return REPLIES with REPLY placed as the last answer to PARENT.
@@ -870,7 +910,7 @@ the reply answers the annotation."
   (interactive)
   (if-let* ((chain (scholia-core--select-chain)))
       (let* ((owner (scholia-chain-owner chain))
-             (parent (or parent (scholia-core--read-parent chain)))
+             (parent (or parent (scholia-core--read-in-thread chain "Reply to: ")))
              (note (or text (read-string "Reply: ")))
              (reply (scholia-db-make-annotation
                      (scholia-core--make-id) note
