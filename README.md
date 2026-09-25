@@ -2,6 +2,10 @@
 
 *σχόλιον • a remark set against a passage*
 
+> Plural *σχόλια* (scholia), from *σχολή* (scholḗ, "leisure, learned discussion")
+>
+> Pronunciation: /ˈsko.li.a/
+
 ## About
 
 scholia annotates files in Emacs without changing them. You mark a region, write a note, and the
@@ -21,23 +25,28 @@ comments appear as threads in a Magit diff, and your replies wait as drafts unti
 
 ## Installation
 
-scholia needs Emacs 29.1 or newer, built with SQLite support, and
-[cera](https://github.com/srnnkls/cera), which draws the notes and the input field. Clone both and
-put them on the load path:
+scholia needs Emacs 29.1 or newer, built with SQLite support. It draws its notes with
+[cera](https://github.com/srnnkls/cera), which no package archive carries yet, so install cera
+first. On Emacs 30 or newer:
 
-```sh
-git clone https://github.com/srnnkls/cera.git ~/.emacs.d/site-lisp/cera
-git clone https://github.com/srnnkls/scholia.git ~/.emacs.d/site-lisp/scholia
+```elisp
+(use-package cera
+  :vc (:url "https://github.com/srnnkls/cera" :rev :newest))
+
+(use-package scholia
+  :vc (:url "https://github.com/srnnkls/scholia" :rev :newest))
 ```
 
-```emacs-lisp
-(add-to-list 'load-path "~/.emacs.d/site-lisp/cera")
-(add-to-list 'load-path "~/.emacs.d/site-lisp/scholia")
-(require 'scholia)
+On Emacs 29, run `M-x package-vc-install` on https://github.com/srnnkls/cera, then on
+https://github.com/srnnkls/scholia. On Doom Emacs, add both to `packages.el`:
+
+```elisp
+(package! cera :recipe (:host github :repo "srnnkls/cera"))
+(package! scholia :recipe (:host github :repo "srnnkls/scholia"))
 ```
 
-Nothing else is required. Sessions are stored under `scholia-session-directory`, which defaults to
-`scholia/sessions/` in your Emacs directory.
+Sessions are stored under `scholia-session-directory`, which defaults to `scholia/sessions/` in
+your Emacs directory.
 
 ## Getting started
 
