@@ -63,14 +63,16 @@ on.
 
 ### scholia-edit-annotation
 
-`C-c C-c`. Replace the note of the annotation at point, starting from its current text. Keeps the
-annotation's id, range, session, colour and replies. Asks which annotation when point is in
-several.
+`C-c C-c`. Replace the text of the annotation at point, or of one of its replies, starting from the
+current text. Keeps the annotation's id, range, session, colour and replies, and a reply's place in
+the thread. Asks which annotation when point is in several, and which part of the thread once the
+annotation has replies.
 
 ### scholia-delete-annotation
 
-`C-c C-d`. Delete the annotation at point and its note. Asks which annotation when point is in
-several.
+`C-c C-d`. Delete the annotation at point and its note, or one of its replies with the replies
+under it. Asks which annotation when point is in several, and which part of the thread once the
+annotation has replies.
 
 ### scholia-reply-to
 
