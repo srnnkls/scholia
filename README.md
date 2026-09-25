@@ -1,264 +1,163 @@
 # scholia
 
-scholia keeps annotations beside source files, in named sessions, and sends or exports them
-where work happens.
+*σχόλιον • a remark set against a passage*
 
-## Install and start
+## About
+
+scholia annotates files in Emacs without changing them. You mark a region, write a note, and the
+note is drawn beside the line it belongs to, in the colour of the session it went into. The file on
+disk, its modified flag and its undo history stay untouched. Replies turn a note into a thread.
+
+Annotations live in named *sessions*, one SQLite database each, so a review, a refactoring plan
+and a list of questions for a colleague stay apart and can be shown side by side. Every annotation
+records how to reach its source again: a file, a file at a Git revision, or a live buffer. That
+makes a session something to work through later: search it, browse it in a dashboard, export it as
+rustc-style diagnostics, a diff or commented source, or send it to an agent.
+
+Reach for scholia when you read code and want to leave remarks you will act on later, when you
+review a change and want notes tied to the lines they discuss, or when you hand a set of findings to
+another person or tool. `scholia-forge` applies the same model to GitHub pull requests: their
+comments appear as threads in a Magit diff, and your replies wait as drafts until you submit them.
+
+## Installation
+
+scholia needs Emacs 29.1 or newer, built with SQLite support, and
+[cera](https://github.com/srnnkls/cera), which draws the notes and the input field. Clone both and
+put them on the load path:
 
 ```sh
+git clone https://github.com/srnnkls/cera.git ~/.emacs.d/site-lisp/cera
 git clone https://github.com/srnnkls/scholia.git ~/.emacs.d/site-lisp/scholia
 ```
 
 ```emacs-lisp
+(add-to-list 'load-path "~/.emacs.d/site-lisp/cera")
 (add-to-list 'load-path "~/.emacs.d/site-lisp/scholia")
 (require 'scholia)
 ```
 
-Annotate in a buffer and the note goes into the resolved default session; annotating also turns
-`scholia-mode` on, which is what saves the note on kill and keeps it placed as the file is edited.
-No integration package or customization is required. The first optional setting is
-`scholia-session-directory`, which chooses where named sessions live:
+Nothing else is required. Sessions are stored under `scholia-session-directory`, which defaults to
+`scholia/sessions/` in your Emacs directory.
 
-```emacs-lisp
-(setq scholia-session-directory "~/.emacs.d/scholia/")
-```
+## Getting started
 
-## Workflow
+Open any file, select a few words, and run `M-x scholia-annotate`. Type a note and press `RET`. The
+selected text is underlined and the note appears to the right of the line, from column 85. Annotating
+turns on `scholia-mode`, whose keys are active from then on.
 
-`scholia-annotate` creates an annotation for the active region, or the symbol at point.
-`scholia-edit-annotation` (`C-c C-c`) edits the annotation at point;
-`scholia-delete-annotation` removes it; `scholia-reply-to` adds a reply. Replies form threads,
-rendered in `scholia-status` and in buffer and session exports.
+Put point in the underlined text and press `C-c C-r` to reply. The reply is drawn under the note, set
+in by two columns. `C-c C-c` changes the note, `C-c C-d` deletes it, and `C-c C-n` and `C-c C-p`
+move between annotations.
 
-### Annotation editor
+Kill the buffer and open the file again: the note is back, because `scholia-mode` stores the
+buffer's annotations when the buffer is killed and when Emacs exits.
 
-The global setting `scholia-annotation-editor` selects the input interface for
-`scholia-annotate` (`C-c C-a`) and `scholia-edit-annotation` (`C-c C-c`). Set it once
-in your Emacs configuration to use inline input in every buffer:
-
-```emacs-lisp
-(setq scholia-annotation-editor 'inline)
-```
-
-Set it to `minibuffer` to use the original interface; this remains the default.
-Both interfaces offer previously stored annotation text
-as completion candidates and accept new text freely. Editing keeps the annotation's identity,
-owning session, source range, and thread.
+Press `C-c C-e` to see the buffer's annotations as a rustc-style diagnostic:
 
 ```text
-╭ Document line at the annotation point
-╰ What is the expected behav█
-  ┌─────────────────────────────────────┐
-  │ What is the expected behavior here? │
-  │ What is the intended output?        │
-  └─────────────────────────────────────┘
-Next document line
+ --> /home/me/src/greet.el:2:4 [c89c2e42-b8a6-11f1-b5a7-01a6851d9858]
+  |
+2 |   (message "Hello, %s" name))
+  |    ^^^^^^^ Use format-message here?
+  |              [c89c2e6a-b8a6-11f1-9e4c-010cee6f04ed] Agreed, it quotes properly.
+  |
 ```
 
-The temporary input uses your theme's Org block face on a subtly darkened background,
-with a small bracket beside the text connecting it to the first selected line. Selected
-words are underlined immediately, and the input appears after the last selected line.
-There is no header
-or keybinding banner. Display space below the input follows the visible rows of the
-ordinary [Corfu popup](https://github.com/minad/corfu) and disappears when it closes.
-Corfu retains your configured width, faces, and candidate count.
-Install Corfu to get the popup. Without it, C-SPC uses standard Emacs
-completion at point. Corfu supplies GUI rendering and native terminal support on Emacs 31;
-older terminal Emacs needs [corfu-terminal](https://codeberg.org/akib/emacs-corfu-terminal).
+Everything so far went into the session called `default`. Run `M-x scholia-session-create` to start
+another one; new annotations go there until you switch back with `M-x scholia-session-switch`.
 
-- **RET** uses your normal completion binding while the popup is open and saves the
-  annotation when it is closed. **C-c C-c** saves directly.
-- **C-g** cancels, leaving an existing annotation intact.
-- **C-SPC** opens annotation history on demand. Opening the field and typing prose
-  leave history suggestions closed; the popup keeps your configured Corfu keys.
-- Other editing bindings remain active, including **ESC** and Meta prefixes. Evil users
-  start in insert state and return to their previous state when the editor closes.
-  Status buffers temporarily use a text editing map so typing and reentering insert
-  state work there too; their original map returns when input closes.
+## Commands and keys
 
-Type **@** to open filename suggestions automatically, for example `See @src/parser.el`. In a project,
-the candidates are project files, inserted as paths relative to its root. Elsewhere,
-completion uses the current directory and supports browsing subdirectories. The `@`
-stays in the note. Outside a filename mention, C-SPC offers recurring annotation text.
+`scholia-mode-map`, active in annotated buffers:
 
-Accepting input first rolls back the temporary text, then creates or updates and stores the
-annotation. The document text, undo history, modified flag, and local completion settings
-are restored on save, cancellation, and errors. The document is protected from edits and
-saves while the field is open. Read-only source buffers are supported.
+| Key | Command | Does |
+| --- | --- | --- |
+| `C-c C-a` | `scholia-annotate` | annotate the region or the symbol at point |
+| `C-c C-c` | `scholia-edit-annotation` | change the note at point |
+| `C-c C-d` | `scholia-delete-annotation` | delete the annotation at point |
+| `C-c C-r` | `scholia-reply-to` | reply to the annotation at point |
+| `C-c C-e` | `scholia-export` | export the buffer's annotations |
+| `C-c C-f` | `scholia-search` | find an annotation in any session and visit it |
+| `C-c C-n` | `scholia-goto-next-annotation` | move to the next annotation |
+| `C-c C-p` | `scholia-goto-previous-annotation` | move to the previous annotation |
 
-Customize `scholia-edit-body` and `scholia-edit-border` for the input's appearance.
+Commands without a key:
 
-### How annotations appear
+| Command | Does |
+| --- | --- |
+| `scholia-session-create` | make a session and annotate into it |
+| `scholia-session-switch` | annotate into another session |
+| `scholia-session-show`, `-hide`, `-toggle` | draw or stop drawing a session beside the target |
+| `scholia-session-rename`, `-delete` | rename or delete a session |
+| `scholia-session-export`, `-import` | write a session to a file, or merge one in |
+| `scholia-session-assign-project` | tie a project to a session |
+| `scholia-export-session` | export whole sessions |
+| `scholia-search-sends` | find an annotation by where it was sent |
+| `scholia-toggle-annotation-authors` | record and show authors, or stop |
+| `scholia-status` | open the dashboard of every session |
+| `scholia-forge-diff-pullreq` | show the forge pull request at point with its comments |
 
-An annotated range is underlined in its session's colour, and the note is drawn beside the
-last line it covers, starting at `scholia-annotation-column` and wrapping at the window
-edge. A note steps aside while the field editing it is open. Replies
-are drawn under the note, set in by `scholia-render-reply-indent` columns per
-level and losing `scholia-reply-tint-step` of the colour's saturation at each, so a thread
-reads as one hue fading inwards. With `scholia-annotation-authors` on, new annotations and
-replies record their author (the repository's git `user.name` and `user.email`), and each
-stored author is drawn under what they wrote; `scholia-toggle-annotation-authors` flips it
-everywhere. Nothing is written to the buffer: the file is untouched,
-the modified flag is unmoved, and undo never sees a note.
+[REFERENCE.md](REFERENCE.md) lists every command, key and option.
 
-### Sessions
+## Concepts
 
-Two things are kept apart: the *target*, where a new annotation goes, and *visibility*,
-which sessions are drawn.
+| Term | Meaning |
+| --- | --- |
+| *annotation* | a note attached to a range of text, with an id, an owner session and a source |
+| *chain* | the overlays that mark one annotation's range, one per line it spans |
+| *note* | the annotation's text as drawn beside or below its last line |
+| *reply* | an annotation that answers another annotation or reply; together they form a *thread* |
+| *session* | a named collection of annotations, stored as one database |
+| *write target* | the session a new annotation in this buffer goes to |
+| *visible sessions* | the sessions drawn in annotated buffers besides the write target |
+| *source* | where an annotation's text lives: a file, a file at a revision, or a buffer |
+| *snapshot* | source text kept with a session so an export can show it after the source changed |
+| *send* | a record, kept on an annotation, of an export delivered to a herdr agent or pane |
 
-The target is the buffer-local `scholia-session`, its project assignment, or the global
-default. `scholia-session-switch` moves the global target and draws that session alone;
-with a prefix argument the sessions drawn until now stay drawn beside it.
-`scholia-session-create` makes an empty session and switches to it.
+## Documentation
 
-Visibility is `scholia-session-hide`, `scholia-session-show` and `scholia-session-toggle`,
-none of which touch the target. The target is always drawn, so hiding it is refused —
-switch away from it first.
+- [GUIDE.md](GUIDE.md) explains how scholia works and walks through each task, starting at
+  [How scholia works](GUIDE.md#how-scholia-works).
+- [REFERENCE.md](REFERENCE.md) lists every command, key binding, option, hook and variable.
+- [CHANGELOG.md](CHANGELOG.md) records what changed in each release.
 
-By default visibility belongs to the sitting: a restart draws the target alone. Set
-`scholia-persist-visibility` to keep it, and the shown sessions and the global target are
-written to `scholia-session-state-file` and read back the first time an annotated buffer is
-drawn:
+## Development
 
-```emacs-lisp
-(setq scholia-persist-visibility t)
+The package is built and tested with [Eask](https://emacs-eask.github.io/):
+
+```sh
+eask install-deps --dev          # cera plus the optional integrations the tests load
+eask compile --strict            # byte-compile the sources, warnings as errors
+eask run script test             # the ERT suites under test/
+eask run script compile-tests    # byte-compile the suites
+eask run script indent           # check indentation of sources and tests
+eask run script checkdoc         # check docstrings
+eask run script package          # package lint
 ```
 
-Each session takes a colour of its own, claimed from `scholia-session-colors` the first
-time it is drawn and stored in its own header, so it keeps that colour across restarts and
-however many sessions are made, renamed or removed beside it. Two sessions are never drawn
-in one colour: past the configured colours the hue wheel turns on for the rest.
+Each module is one file:
 
-A new annotation goes to the write target. With a prefix argument, `scholia-annotate` selects
-another visible session. Replies and deletes always follow the selected annotation's owning
-session. `scholia-export` exports every visible session in the current buffer; with a prefix
-argument, it selects one. Use `scholia-export-session` for one or more complete sessions.
+- `scholia.el`: `scholia-mode`, its keymap and the autoloads.
+- `scholia-vars.el`: the customization group and the shared options.
+- `scholia-core.el`: session resolution, the annotation commands, saving and restoring.
+- `scholia-overlay.el`, `scholia-render.el`, `scholia-color.el`: chains, notes and colours.
+- `scholia-edit.el`, `scholia-ui.el`: reading a note inline or in the minibuffer.
+- `scholia-session.el`: the session commands and project assignments.
+- `scholia-db.el`, `scholia-store.el`: the session database.
+- `scholia-locate.el`: source access for files, revisions and buffers.
+- `scholia-export.el`, `scholia-search.el`, `scholia-filter.el`, `scholia-status.el`,
+  `scholia-thread.el`: export, search, the dashboard and thread order.
+- `scholia-magit.el`, `scholia-ediff.el`, `scholia-timemachine.el`, `scholia-org-remark.el`,
+  `scholia-herdr.el`, `scholia-forge.el`: the integrations.
 
-Import a session with `scholia-session-import`. Find annotations across sessions with
-`scholia-search`, or sent work with `scholia-search-sends`. `scholia-status` is the session
-dashboard.
-
-## Sources and recovery
-
-Files and arbitrary live buffers work without an integration module. Each annotation records a
-serializable access descriptor; file, Git revision, and buffer descriptors identify how to reopen
-or describe the source. Magit, Ediff, and git-timemachine supply revision-aware locations after
-their optional resolver setup functions are enabled.
-
-`scholia-source-snapshot-mode` controls retained source text. The default, `bounded-full`, keeps a
-complete snapshot up to `scholia-source-snapshot-limit`; larger sources fall back to saved line
-excerpts and are marked truncated. Set the mode to `excerpts` to retain excerpts only. Session
-exports label every source view with its access description and whether the rendered source is
-`live`, `full`, or `excerpt`; truncated excerpt fallback is labeled too.
-
-## Optional integrations
-
-Load and enable only the integrations you use:
-
-```emacs-lisp
-(require 'scholia-magit)
-(scholia-magit-setup)
-
-(require 'scholia-ediff)
-(scholia-ediff-setup)
-
-(require 'scholia-timemachine)
-(scholia-timemachine-setup)
-
-(require 'scholia-ui)
-(scholia-ui-marginalia-setup)
-```
-
-These setup functions are idempotent. Their matching teardown functions remove Scholia's hooks,
-advice, or Marginalia registration:
-
-```emacs-lisp
-(scholia-magit-teardown)
-(scholia-ediff-teardown)
-(scholia-timemachine-teardown)
-(scholia-ui-marginalia-teardown)
-```
-
-### GitHub pull requests
-
-`scholia-forge` shows a pull request's comments in a Magit diff of it, named
-`*magit-diff: OWNER/REPO #N TITLE*`. It needs Magit and the GitHub CLI `gh`, authenticated for the
-pull request's host; forge is only needed for `scholia-forge-diff-pullreq`, which opens the pull
-request at point. `scholia-forge-open` opens one from its host, owner, repository, number, revision
-range and title.
-
-Review comments are drawn on their lines with their replies under them, comments on a whole file on
-its heading, and the description, conversation comments and review summaries on the first line.
-Each comment wears its author's colour and byline; `scholia-forge-author-colors` pins colours to
-logins. Comments whose line the diff no longer has are gathered in a marker on their file's heading,
-and `scholia-forge-show-thread` (`C-c C-o`) shows them with the hunk they were made on.
-
-Comments and replies written there are drafts, typed in a cera field in a child frame on a graphic
-display, and kept in the session `OWNER-REPO-pr-N` until they are submitted. `scholia-forge-push`
-(`C-c C-p`) opens a buffer for the review's summary over an overview of the drafts; `C-c C-c` there
-submits the summary and the comments on lines as one review, as a plain comment, an approval or a
-change request, and then the replies and conversation comments; `C-c C-k` leaves the drafts. `scholia-annotate`, `scholia-reply-to`, `scholia-edit-annotation` and
-`scholia-delete-annotation` draft, reply to, edit and delete drafts there; comments already on
-GitHub are not changed. `scholia-forge-refetch` (`C-c C-g`) reads the pull request again.
-
-The dashboard and Org Remark exporter are commands from separate modules:
-
-```emacs-lisp
-(require 'scholia-status)
-(require 'scholia-org-remark)
-```
-
-Generic buffers and ordinary files use the built-in source adapters. Magit, Ediff,
-git-timemachine, Marginalia, the dashboard, and Org Remark remain optional.
-
-`scholia-herdr` is source-tree/local-only: both it and its unpublished `herdr` dependency are
-excluded from the package. When both are available locally, load it with `(require 'scholia-herdr)`.
-`scholia-org-remark-export` exports sessions to Org Remark.
-
-If an old Doom configuration defines `+annotate-export-rustc` or
-`+annotate--fix-integrate-padding`, delete both. `scholia-export` replaces the former, and
-`scholia-export-integrate` replaces the latter.
-
-## Doom
-
-`SPC a` is unclaimed by Doom's default leader and is a suggestion, not a required prefix.
-Add this to a Doom configuration if it suits your leader layout:
-
-```emacs-lisp
-(map! :leader
-      :prefix ("a" . "scholia")
-      :desc "Annotate" "a" #'scholia-annotate
-      :desc "Edit annotation" "c" #'scholia-edit-annotation
-      :desc "Delete annotation" "d" #'scholia-delete-annotation
-      :desc "Reply" "r" #'scholia-reply-to
-      :desc "Next annotation" "n" #'scholia-goto-next-annotation
-      :desc "Previous annotation" "p" #'scholia-goto-previous-annotation
-      :desc "Create session" "s c" #'scholia-session-create
-      :desc "Switch session" "s s" #'scholia-session-switch
-      :desc "Show session" "s v" #'scholia-session-show
-      :desc "Hide session" "s h" #'scholia-session-hide
-      :desc "Toggle session" "s t" #'scholia-session-toggle
-      :desc "Import session" "s i" #'scholia-session-import
-      :desc "Search annotations" "f" #'scholia-search
-      :desc "Search sends" "F" #'scholia-search-sends
-      :desc "Export buffer" "e b" #'scholia-export
-      :desc "Export sessions" "e s" #'scholia-export-session
-      :desc "Export Org Remark" "e o" #'scholia-org-remark-export
-      :desc "Send annotation" "h a" #'scholia-herdr-send
-      :desc "Send region" "h r" #'scholia-herdr-send-region
-      :desc "Send file" "h f" #'scholia-herdr-send-file
-      :desc "Send session" "h s" #'scholia-herdr-send-session
-      :desc "Status" "S" #'scholia-status)
-```
-
-scholia ships no Doom binding file: `map!` is a Doom macro, and package CI cannot byte-compile a
-file that calls it without Doom.
+`scholia-herdr.el` and its tests are left out of the package and of CI, because Eask cannot fetch
+herdr.el; they run locally where herdr.el is on the load path.
 
 ## Credit
 
 [annotate.el](https://github.com/bastibe/annotate.el), by Bastian Bechtold and contributors, is
-prior art for scholia. Its source was consulted for edge cases covered by scholia's tests; no
-annotate.el code is copied or retained here.
+prior art for scholia. Its source informed edge cases covered by scholia's tests; no annotate.el
+code is copied or retained here.
 
 ## License
 
