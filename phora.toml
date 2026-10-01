@@ -1,5 +1,3 @@
-version = 1
-
 [sources."annotate.el"]
 git = "https://github.com/bastibe/annotate.el.git"
 
