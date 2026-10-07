@@ -383,5 +383,41 @@
    (when (fboundp 'scholia-org-remark-export)
      '(["Export org-remark" scholia-org-remark-export]))))
 
+;;;; Evil
+
+(declare-function evil-define-key* "ext:evil-core" (state keymap key def &rest bindings))
+(declare-function evil-make-overriding-map "ext:evil-core" (keymap &optional state copy))
+(defvar evil-normal-state-map)
+(defvar evil-motion-state-map)
+
+(defconst scholia-status-evil-renames '(("g" . "gd") ("h" . "H"))
+  "Dashboard keys that evil's normal state keeps for itself.
+Each pair is a key in `scholia-status-mode-map' and the key its command
+moves to, leaving evil its `g' prefix and its `h' motion.")
+
+(defun scholia-status--evil-own (key)
+  "Return evil's normal-state binding of KEY, a fresh prefix where it is one.
+The fresh prefix inherits evil's, so binding into it leaves evil's alone."
+  (let ((own (delq nil (list (keymap-lookup evil-normal-state-map key)
+                             (keymap-lookup evil-motion-state-map key)))))
+    (if (keymapp (car own))
+        (let ((prefix (make-sparse-keymap)))
+          (set-keymap-parent prefix (make-composed-keymap (seq-filter #'keymapp own)))
+          prefix)
+      (car own))))
+
+(defun scholia-status-evil-setup ()
+  "Put the dashboard's keys ahead of evil's normal state.
+Keys other packages add to `scholia-status-mode-map' later take effect
+too, since evil consults the keymap itself."
+  (evil-make-overriding-map scholia-status-mode-map 'normal)
+  (pcase-dolist (`(,key . ,_) scholia-status-evil-renames)
+    (evil-define-key* 'normal scholia-status-mode-map (kbd key) (scholia-status--evil-own key)))
+  (pcase-dolist (`(,key . ,moved) scholia-status-evil-renames)
+    (let ((command (keymap-lookup scholia-status-mode-map key)))
+      (evil-define-key* 'normal scholia-status-mode-map (kbd moved) command))))
+
+(with-eval-after-load 'evil (scholia-status-evil-setup))
+
 (provide 'scholia-status)
 ;;; scholia-status.el ends here
