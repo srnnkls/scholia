@@ -366,7 +366,9 @@
   "Keymap for `scholia-status-mode'.")
 
 (define-derived-mode scholia-status-mode magit-section-mode "Scholia Status"
-  "Major mode for the scholia annotation dashboard.")
+  "Major mode for the scholia annotation dashboard."
+  (when (featurep 'evil)
+    (scholia-status-evil-setup)))
 
 (easy-menu-define scholia-status-mode-menu scholia-status-mode-map
   "Menu for `scholia-status-mode'."
@@ -416,8 +418,6 @@ too, since evil consults the keymap itself."
   (pcase-dolist (`(,key . ,moved) scholia-status-evil-renames)
     (let ((command (keymap-lookup scholia-status-mode-map key)))
       (evil-define-key* 'normal scholia-status-mode-map (kbd moved) command))))
-
-(with-eval-after-load 'evil (scholia-status-evil-setup))
 
 (provide 'scholia-status)
 ;;; scholia-status.el ends here
