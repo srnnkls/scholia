@@ -139,6 +139,25 @@
                               (scholia-db-record session file)))
                      '("kept"))))))
 
+(ert-deftest scholia-status-04-compact-send-renders-as-every-send ()
+  "A compact send goes through the one renderer, under its sessions' heading."
+  (require 'scholia-status)
+  (let* ((first (scholia-status-test--annotation "one" "first hunk"))
+         (second (scholia-status-test--annotation "two" "second hunk"))
+         (record (scholia-db-make-record "/tmp/a.el" (list first second) "seed"))
+         (entries (list (list :session "review" :file "/tmp/a.el"
+                              :record record :annotation first)
+                        (list :session "draft" :file "/tmp/a.el"
+                              :record record :annotation second)))
+         rendered)
+    (cl-letf (((symbol-function 'scholia-herdr-render)
+               (lambda (scope groups &optional session)
+                 (setq rendered (list scope groups session))
+                 "section")))
+      (should (equal (scholia-status--payload entries 'compact) "section"))
+      (should (equal rendered
+                     `(status (("/tmp/a.el" ,first ,second)) "review, draft"))))))
+
 (ert-deftest scholia-status-04-sends-selected-hunks-as-one-batch ()
   (require 'scholia-status)
   (scholia-test-with-session-directory
@@ -151,7 +170,8 @@
            (entry '(agent . "target"))
            (entries 0)
            (renders nil)
-           (sends nil))
+           (sends nil)
+           (scholia-herdr-send-format 'rustc))
       (scholia-db-create-session session)
       (scholia-db-store-record
        session (scholia-db-make-record file (list first second) "seed"))

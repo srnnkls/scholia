@@ -276,6 +276,10 @@ cookies can make a command autoloadable."
                     scholia-export-format
                     scholia-herdr-default-target
                     scholia-herdr-send-format
+                    scholia-export-compact-heading
+                    scholia-export-compact-entry
+                    scholia-export-compact-reply
+                    scholia-export-compact-quote
                     scholia-annotation-history-limit
                     scholia-session-colors
                     scholia-reply-tint-step
@@ -296,7 +300,7 @@ cookies can make a command autoloadable."
   (should (functionp (default-value 'scholia-project-root-function)))
   (should (eq (default-value 'scholia-export-format) 'rustc))
   (should-not (default-value 'scholia-herdr-default-target))
-  (should-not (default-value 'scholia-herdr-send-format))
+  (should (eq (default-value 'scholia-herdr-send-format) 'compact))
   (should (equal (default-value 'scholia-annotation-history-limit) 200))
   (should (eq (default-value 'scholia-source-snapshot-mode) 'bounded-full))
   (should (equal (default-value 'scholia-source-snapshot-limit) (* 256 1024)))

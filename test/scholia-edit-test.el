@@ -301,7 +301,6 @@ fallback character is given nothing rather than a box."
               ((symbol-function 'nerd-icons-mdicon)
                (lambda (name &rest arguments)
                  (propertize "*" 'glyph name
-                             'face (plist-get arguments :face)
                              'height (plist-get arguments :height)))))
       (let ((drawn (scholia-edit--icon color)))
         (should (equal (get-text-property 0 'glyph drawn) scholia-edit-icon))
@@ -321,6 +320,22 @@ fallback character is given nothing rather than a box."
       (should-not (scholia-edit--icon color)))
     (let ((scholia-edit-icon nil))
       (should-not (scholia-edit--icon color)))))
+
+(ert-deftest scholia-edit-glyph-wears-its-colour-whatever-nerd-icons-colours ()
+  "The colour is laid over the glyph's own face, not handed to nerd-icons.
+Nerd-icons drops the face it is given while `nerd-icons-color-icons' is
+off, which left the field's glyph in the text's colour."
+  (let ((color "#F1D063")
+        (own '(:family "Symbols Nerd Font Mono" :height 0.75)))
+    (cl-letf (((symbol-function 'scholia-edit--nerd-font-p) (lambda () t))
+              ((symbol-function 'nerd-icons-mdicon)
+               (lambda (_name &rest _arguments)
+                 (propertize "*" 'face own 'font-lock-face own))))
+      (let ((drawn (scholia-edit--icon color)))
+        (should (equal (get-text-property 0 'face drawn)
+                       (list (list :foreground color) own)))
+        (should (equal (get-text-property 0 'font-lock-face drawn)
+                       (get-text-property 0 'face drawn)))))))
 
 (ert-deftest scholia-edit-existing-note-gives-way-to-the-field ()
   "The note steps aside while its field is open and comes back on cancel."

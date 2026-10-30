@@ -74,6 +74,21 @@ its terminator at 37.")
 
 ;;;; The annotation commands
 
+(ert-deftest scholia-core-palette-change-redraws-what-is-shown ()
+  "Setting the palette draws the annotations shown in it at once."
+  (let ((palette scholia-session-colors))
+    (unwind-protect
+        (scholia-test-with-session-directory
+          (scholia-test-with-temp-file-buffer _buffer scholia-core-test--source
+            (setq-local scholia-session "palette")
+            (scholia-mode 1)
+            (let ((chain (scholia-create-chain 1 6 "note" 0)))
+              (customize-set-variable 'scholia-session-colors '("#112233"))
+              (should (equal (overlay-get (car chain) 'face)
+                             (scholia-color-highlight-face
+                              (scholia-color-on-theme "#112233")))))))
+      (customize-set-variable 'scholia-session-colors palette))))
+
 (ert-deftest scholia-core-annotates-the-region-then-the-symbol-at-point ()
   (scholia-test-with-session-directory
     (scholia-test-with-temp-file-buffer _buffer scholia-core-test--source

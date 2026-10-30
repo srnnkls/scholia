@@ -447,6 +447,16 @@ and nil comes back when neither says who."
                 (buffer-local-value 'scholia-mode buffer))
               (buffer-list)))
 
+(defun scholia-redraw-colors ()
+  "Draw every annotation shown in the colour its session wears now.
+Each chain's underline and note are drawn again where they stand, so a
+changed palette shows at once and nothing is read back from disk."
+  (dolist (buffer (scholia-core--annotated-buffers))
+    (with-current-buffer buffer
+      (dolist (chain (scholia-buffer-chains))
+        (scholia-refresh-chain-face chain)
+        (scholia-render-chain chain)))))
+
 (defun scholia-core--disarm-quit-save ()
   "Drop the quit save once this buffer is the last that needed it.
 The `kill-emacs-hook' entry is one for all of Emacs, so removing it

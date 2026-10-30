@@ -148,7 +148,34 @@ owns whatever is on screen when the mode goes down or the buffer dies."
   "Format `scholia-export' produces."
   :type '(choice (const :tag "rustc diagnostics" rustc)
                  (const :tag "Unified diff" diff)
-                 (const :tag "Annotations integrated into the text" integrate)))
+                 (const :tag "Annotations integrated into the text" integrate)
+                 (const :tag "One line per annotation" compact)
+                 (const :tag "Fenced YAML" yaml)))
+
+(defcustom scholia-export-compact-heading "Scholia annotations · session %s · scope %S"
+  "Heading a `compact' section opens with.
+%s is the session and %S the scope the annotations were taken from."
+  :type 'string)
+
+(defcustom scholia-export-compact-entry "- %p — %n"
+  "Line an annotation reads as in the `compact' format.
+%p is its file and place, %n the first line of its note, %a its author
+behind which a colon follows, empty without one, %i its id, and %t the
+text it marks in backticks behind a space, empty where that text runs
+over several lines.  Further lines of the note follow, set in under the
+entry, and the text it marks follows them, quoted."
+  :type 'string)
+
+(defcustom scholia-export-compact-quote "> "
+  "Prefix each line of the text an annotation marks takes in `compact'.
+The marked text follows the note, so the two read apart however many
+lines either runs over.  Nil leaves the marked text out."
+  :type '(choice (const :tag "Leave it out" nil) string))
+
+(defcustom scholia-export-compact-reply "↳ %a%n"
+  "Line a reply reads as in the `compact' format, set in by its depth.
+The specs are those of `scholia-export-compact-entry'."
+  :type 'string)
 
 (defcustom scholia-herdr-default-target nil
   "Herdr target sends go to without asking.
@@ -156,13 +183,15 @@ Nil prompts for a target instead."
   :type '(choice (const :tag "Ask" nil)
                  (string :tag "Target")))
 
-(defcustom scholia-herdr-send-format nil
-  "Format annotations are rendered in when sent to herdr.
+(defcustom scholia-herdr-send-format 'compact
+  "Format annotations are rendered in when sent to an agent.
 Nil falls back to `scholia-export-format'."
   :type '(choice (const :tag "Follow `scholia-export-format'" nil)
                  (const :tag "rustc diagnostics" rustc)
                  (const :tag "Unified diff" diff)
-                 (const :tag "Annotations integrated into the text" integrate)))
+                 (const :tag "Annotations integrated into the text" integrate)
+                 (const :tag "One line per annotation" compact)
+                 (const :tag "Fenced YAML" yaml)))
 
 
 ;;;; Appearance and behaviour
@@ -178,13 +207,17 @@ optional Corfu completion.  `minibuffer' uses `completing-read'."
   "How many past annotations are offered as recurring candidates."
   :type 'natnum)
 
-(defcustom scholia-session-colors '("#F5DD8E" "#8EF5DD" "#DD8EF5"
+(defcustom scholia-session-colors '("#E5C07B" "#8EF5DD" "#DD8EF5"
                                     "#CFF58E" "#F5988E" "#8EADF5")
   "Colours sessions are drawn in, taken in order, one session each.
 Every annotation of a session wears its colour, whichever of them it is.
 A buffer showing more sessions than there are colours here turns the hue
 wheel on for the rest rather than giving two sessions one colour."
-  :type '(repeat color))
+  :type '(repeat color)
+  :set (lambda (symbol value)
+         (set-default-toplevel-value symbol value)
+         (when (fboundp 'scholia-redraw-colors)
+           (scholia-redraw-colors))))
 
 (defcustom scholia-reply-tint-step 0.35
   "How much of its saturation a reply loses against the note it answers.

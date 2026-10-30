@@ -173,6 +173,13 @@ without a display behind it is drawn as it is written."
         (color-rgb-to-hex red green blue 2))
     color))
 
+(defun scholia-color-of-session (session)
+  "Return the colour SESSION's annotations wear in this buffer.
+It is the colour on the theme, so whatever marks a session elsewhere
+matches the notes it marks."
+  (scholia-color-on-theme
+   (scholia-color-for-index (scholia-session-color-index session))))
+
 (defun scholia-color--moved-away (color)
   "Return COLOR deepened by `scholia-emphasis-shade' percent.
 A session colour is pale on either theme, so down is the only direction

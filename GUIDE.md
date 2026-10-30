@@ -308,6 +308,9 @@ into `*scholia-export*`. With a prefix argument it asks for one session. Each se
   the replies nested under the note.
 - `diff` renders a unified diff that adds each note as a comment under its line.
 - `integrate` renders the source with each note inserted as a comment under its line.
+- `compact` gives each annotation a line, its note behind its place, and quotes the text it marks
+  under it.
+- `yaml` renders a fenced YAML list of the annotations, replies nested under the note they answer.
 
 Every rendering carries each annotation's id in brackets, so a reader can refer to it. Replies whose
 annotation is not in the export are listed at the end. This is the `integrate` format for the
@@ -349,7 +352,20 @@ with `(require 'scholia-herdr)`.
 | `scholia-herdr-send-session` | every annotation of a session |
 
 Each command asks for a destination unless `scholia-herdr-default-target` names one, and renders in
-`scholia-herdr-send-format`, or in `scholia-export-format` when that is nil. After a successful
+`scholia-herdr-send-format`, `compact` by default, or in `scholia-export-format` when that is nil.
+A `compact` send opens with a heading naming the session and the scope, and names files relative to
+the project:
+
+```text
+Scholia annotations · session default · scope file
+- src/app.typ:16:1-24 — Too narrow here?
+  > #set par(justify: false)
+  ↳ ana: Fixed in the template.
+```
+
+`scholia-export-compact-heading`, `scholia-export-compact-entry`, `scholia-export-compact-reply`
+and `scholia-export-compact-quote` are its templates. A `yaml` send carries the session and scope as
+keys of one fenced document. After a successful
 send, every annotation sent records where it went and when; `scholia-search-sends` and the
 dashboard read those records. `scholia-send-functions` runs after each recorded send.
 

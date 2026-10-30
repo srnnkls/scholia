@@ -126,24 +126,32 @@ that, in its own height, is what centres it."
         (propertize glyph 'display `(raise ,(/ (- 1.0 height) (* 2 height))))
       glyph)))
 
+(defun scholia-edit--colored (glyph color)
+  "Return GLYPH with COLOR over the faces it already wears.
+Nerd-icons takes a face only while `nerd-icons-color-icons' is on, so the
+colour is laid on here rather than handed to it, under `font-lock-face'
+as well for a buffer that draws that one instead."
+  (when color
+    (add-face-text-property 0 (length glyph) (list :foreground color) nil glyph)
+    (put-text-property 0 (length glyph) 'font-lock-face
+                       (get-text-property 0 'face glyph) glyph))
+  glyph)
+
 (defun scholia-edit-glyph (name fallback &optional color)
   "Return the Nerd Font glyph NAME, or FALLBACK where the font is missing.
 The glyph is drawn at `scholia-edit-icon-height' in COLOR and centred on
 the line, and nil comes back for a nil NAME or a FALLBACK the frame
 cannot display."
-  (let ((face (and color (list :foreground color))))
-    (when name
-      (if (scholia-edit--nerd-font-p)
-          (scholia-edit--centred
-           (nerd-icons-mdicon name :face face :height scholia-edit-icon-height))
-        (when (and fallback (char-displayable-p (string-to-char fallback)))
-          (propertize fallback 'face face))))))
+  (when name
+    (if (scholia-edit--nerd-font-p)
+        (scholia-edit--centred
+         (scholia-edit--colored
+          (nerd-icons-mdicon name :height scholia-edit-icon-height) color))
+      (when (and fallback (char-displayable-p (string-to-char fallback)))
+        (scholia-edit--colored (copy-sequence fallback) color)))))
 
 (defun scholia-edit--icon (color)
-  "Return the glyph drawn in front of the field in COLOR, or nil for none.
-The Nerd Font glyph where that font is installed and a plain quotation
-mark where it is not, so a frame without the font marks the field rather
-than drawing a box for a character it has no glyph for."
+  "Return the glyph drawn in front of the field in COLOR, or nil for none."
   (scholia-edit-glyph scholia-edit-icon scholia-edit-icon-fallback color))
 
 (defun scholia-edit-read (table &optional initial bounds)
@@ -161,9 +169,7 @@ completion, so an active completion menu keeps its own RET.
 Temporary text is rolled back before returning.  Point, narrowing, undo,
 modification status, hooks and borrowed local settings are restored on
 accept, quit and error.  Cancelling signals `quit', like a minibuffer."
-  (let* ((color (scholia-color-on-theme
-                 (scholia-color-for-index
-                  (scholia-session-color-index (scholia-session-name)))))
+  (let* ((color (scholia-color-of-session (scholia-session-name)))
          (cera-completion-function #'scholia-edit--completion)
          (cera-input-prefix (scholia-edit--icon color)))
     (cera-read table initial bounds (scholia-color-highlight-face color))))

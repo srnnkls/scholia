@@ -119,6 +119,77 @@ Call PERSIST with durable send metadata after success."
   "Return the annotations exported from this buffer for OWNER."
   (scholia-export--payload owner))
 
+(defun scholia-herdr--overlapping (annotations beg end)
+  "Return the root ANNOTATIONS overlapping BEG to END."
+  (seq-filter
+   (lambda (annotation)
+     (and (not (scholia-db-annotation-reply-p annotation))
+          (< (scholia-db-annotation-beg annotation) end)
+          (< beg (scholia-db-annotation-end annotation))))
+   annotations))
+
+(defun scholia-herdr--render-session (session records format)
+  "Return SESSION rendered as FORMAT from its RECORDS."
+  (cl-letf (((symbol-function 'scholia-export--session-records)
+             (lambda (_session) records)))
+    (scholia-export-session session nil format)))
+
+(defun scholia-herdr--threads (roots annotations)
+  "Return ROOTS among ANNOTATIONS with every reply under them, in order."
+  (let ((ids (mapcar #'scholia-db-annotation-id roots))
+        (grown t))
+    (while grown
+      (setq grown nil)
+      (dolist (annotation annotations)
+        (when (and (scholia-db-annotation-reply-p annotation)
+                   (member (scholia-db-annotation-reply-to annotation) ids)
+                   (not (member (scholia-db-annotation-id annotation) ids)))
+          (push (scholia-db-annotation-id annotation) ids)
+          (setq grown t))))
+    (delete-dups
+     (seq-filter (lambda (annotation)
+                   (member (scholia-db-annotation-id annotation) ids))
+                 (append roots annotations)))))
+
+(defun scholia-herdr-annotations (scope &optional beg end)
+  "Return the annotations a send of SCOPE would carry from this buffer.
+SCOPE is `point', the annotations covering point; `region', those
+overlapping BEG to END; `file', every one of this file; or `session',
+every one of the session this buffer annotates into.  Each entry is a
+file, or nil for a buffer visiting none, consed onto its annotations,
+replies included.  Nothing is sent or recorded, and nil comes back where
+the scope holds none."
+  (if (eq scope 'session)
+      (mapcar (lambda (record)
+                (cons (scholia-db-record-file record)
+                      (scholia-db-record-annotations record)))
+              (seq-filter #'scholia-db-record-annotations
+                          (scholia-herdr--session-records
+                           (scholia-session-name))))
+    (let* ((payload (scholia-herdr--buffer-payload))
+           (roots (pcase scope
+                    ('point (scholia-herdr--overlapping
+                             payload (point) (1+ (point))))
+                    ('region (scholia-herdr--overlapping payload beg end))
+                    ('file (append payload scholia--unplaced-annotations)))))
+      (when roots
+        (list (cons (buffer-file-name (buffer-base-buffer))
+                    (if (eq scope 'file)
+                        roots
+                      (scholia-herdr--threads roots payload))))))))
+
+(defun scholia-herdr-render (scope entries &optional session)
+  "Return ENTRIES taken from SESSION by SCOPE as a send carries them.
+ENTRIES are files, or buffers, consed onto their annotations, as
+`scholia-herdr-annotations' gives them.  They are rendered in
+`scholia-herdr-send-format', files named relative to
+`scholia-export-directory' or else the project root.  SESSION defaults
+to the one this buffer annotates into."
+  (let ((scholia-export-directory
+         (or scholia-export-directory (funcall scholia-project-root-function))))
+    (scholia-export-section entries (scholia-herdr--format)
+                            (or session (scholia-session-name)) scope)))
+
 (defun scholia-herdr--send-buffer (select payload scope &optional owner)
   "Send annotations SELECT takes from PAYLOAD with SCOPE for OWNER."
   (let* ((format (scholia-herdr--format))
@@ -127,7 +198,7 @@ Call PERSIST with durable send metadata after success."
       (user-error "No annotations to send"))
     (scholia-herdr--send
      annotations
-     (scholia-export-render annotations format)
+     (scholia-herdr-render scope (list (cons (current-buffer) annotations)) owner)
      format scope
      (lambda (sent send)
        (scholia-herdr--store-buffer sent send owner)))))
@@ -158,13 +229,7 @@ Call PERSIST with durable send metadata after success."
   (let ((beg (or beg (region-beginning)))
         (end (or end (region-end))))
     (scholia-herdr--send-buffer
-     (lambda (payload)
-       (seq-filter
-        (lambda (annotation)
-          (and (not (scholia-db-annotation-reply-p annotation))
-               (< (scholia-db-annotation-beg annotation) end)
-               (< beg (scholia-db-annotation-end annotation))))
-        payload))
+     (lambda (payload) (scholia-herdr--overlapping payload beg end))
      (scholia-herdr--buffer-payload)
      'region)))
 
@@ -179,7 +244,7 @@ Call PERSIST with durable send metadata after success."
       (user-error "No annotations to send"))
     (scholia-herdr--send
      annotations
-     (scholia-export-render annotations format)
+     (scholia-herdr-render 'file (list (cons (current-buffer) annotations)))
      format 'file
      (lambda (sent send) (scholia-herdr--store-buffer sent send)))))
 
@@ -208,13 +273,19 @@ Call PERSIST with durable send metadata after success."
                              (mapcar #'scholia-db-record-annotations records))))
     (unless annotations
       (user-error "No annotations to send"))
-    (cl-letf (((symbol-function 'scholia-export--session-records)
-               (lambda (_session) records)))
-      (scholia-herdr--send
-       annotations
-       (scholia-export-session session nil format)
-       format 'session
-       (lambda (sent send) (scholia-herdr--store-session session sent send))))))
+    (scholia-herdr--send
+     annotations
+     (if (memq format '(compact yaml))
+         (scholia-herdr-render
+          'session
+          (mapcar (lambda (record)
+                    (cons (scholia-db-record-file record)
+                          (scholia-db-record-annotations record)))
+                  records)
+          session)
+       (scholia-herdr--render-session session records format))
+     format 'session
+     (lambda (sent send) (scholia-herdr--store-session session sent send)))))
 
 (provide 'scholia-herdr)
 ;;; scholia-herdr.el ends here

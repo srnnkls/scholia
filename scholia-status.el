@@ -27,6 +27,7 @@
 (require 'scholia-thread)
 
 (declare-function scholia-herdr--send "scholia-herdr")
+(declare-function scholia-herdr-render "scholia-herdr" (scope entries &optional session))
 
 (defsubst scholia-status--section-value (section)
   "Return SECTION's value."
@@ -327,12 +328,25 @@
         (scholia-export-render annotations format file)))))
 
 (defun scholia-status--payload (entries format)
-  "Render ENTRIES grouped by their source files using FORMAT."
-  (string-join
-   (mapcar (lambda (group)
-             (scholia-status--render-file (cdr group) format))
-           (scholia-status--file-groups entries))
-   "\n\n"))
+  "Render ENTRIES grouped by their source files using FORMAT.
+The `compact' and `yaml' formats render as every send renders them,
+under one heading naming the sessions ENTRIES come from; the others
+render each file against its source."
+  (let ((groups (scholia-status--file-groups entries)))
+    (if (memq format '(compact yaml))
+        (scholia-herdr-render
+         'status
+         (mapcar (lambda (group)
+                   (cons (scholia-db-entry-file (cadr group))
+                         (mapcar #'scholia-db-entry-annotation (cdr group))))
+                 groups)
+         (string-join (delete-dups (mapcar #'scholia-db-entry-session entries))
+                      ", "))
+      (string-join
+       (mapcar (lambda (group)
+                 (scholia-status--render-file (cdr group) format))
+               groups)
+       "\n\n"))))
 
 (defun scholia-status-send (entries)
   "Send ENTRIES to one herdr target."

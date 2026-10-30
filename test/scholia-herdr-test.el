@@ -69,6 +69,51 @@
         (should (string-match-p "\\`[0-9]\\{4\\}-[0-9][0-9]-[0-9][0-9]T"
                                 (scholia-db-send-at send)))))))
 
+(defun scholia-herdr-test--texts (entries)
+  (mapcar #'scholia-db-annotation-text (apply #'append (mapcar #'cdr entries))))
+
+(ert-deftest scholia-herdr-annotations-select-each-scope-without-sending ()
+  "Each scope takes what its send command would, replies with their roots."
+  (scholia-herdr-test--with-buffer
+    (scholia-create-chain 1 6 "alpha note")
+    (scholia-create-chain 12 17 "gamma note")
+    (cl-letf (((symbol-function 'herdr-api-agent-prompt)
+               (lambda (&rest _) (error "Selecting must not send")))
+              ((symbol-function 'herdr-api-pane-send-text)
+               (lambda (&rest _) (error "Selecting must not send"))))
+      (goto-char 2)
+      (let ((point (scholia-herdr-annotations 'point)))
+        (should (equal (mapcar #'car point) (list (buffer-file-name))))
+        (should (equal (scholia-herdr-test--texts point) '("alpha note"))))
+      (let ((rendered (scholia-herdr-render 'point (scholia-herdr-annotations 'point))))
+        (should (string-prefix-p
+                 "Scholia annotations · session selected · scope point\n- " rendered))
+        (should (string-match-p ":1:1-5 — alpha note\n  > alpha\\'" rendered)))
+      (goto-char (point-max))
+      (should-not (scholia-herdr-annotations 'point))
+      (should (equal (scholia-herdr-test--texts (scholia-herdr-annotations 'region 10 20))
+                     '("gamma note")))
+      (should-not (scholia-herdr-annotations 'region 25 30))
+      (should (equal (sort (scholia-herdr-test--texts (scholia-herdr-annotations 'file))
+                           #'string<)
+                     '("alpha note" "gamma note")))
+      (scholia-save-annotations)
+      (should (equal (sort (scholia-herdr-test--texts (scholia-herdr-annotations 'session))
+                           #'string<)
+                     '("alpha note" "gamma note")))
+      (should-not (delq nil (scholia-herdr-test--sends))))))
+
+(ert-deftest scholia-herdr-threads-carry-every-reply-under-their-roots ()
+  (let* ((root (list :id "a" :text "root"))
+         (other (list :id "b" :text "other"))
+         (reply (list :id "c" :text "reply" :reply-to "a"))
+         (nested (list :id "d" :text "nested" :reply-to "c"))
+         (stray (list :id "e" :text "stray" :reply-to "b")))
+    (should (equal (mapcar #'scholia-db-annotation-text
+                           (scholia-herdr--threads
+                            (list root) (list root other nested reply stray)))
+                   '("root" "nested" "reply")))))
+
 (ert-deftest scholia-herdr-send-dispatches-a-herdr-pane-without-an-agent ()
   (scholia-herdr-test--with-buffer
     (scholia-create-chain 7 11 "beta")

@@ -194,6 +194,87 @@ touches is a file the user keeps."
 
 ;;;; The rustc format
 
+(defconst scholia-export-test--thread
+  '((:id "a1" :line 16 :column 0 :end-column 24
+         :annotated-text "#set par(justify: false)" :text "Hi")
+    (:id "r1" :reply-to "a1" :author "ben" :text "Why?")
+    (:id "r2" :reply-to "r1" :text "Width.")
+    (:id "a2" :line 3 :column 2 :end-column 9 :author "ana"
+         :annotated-text "first\nsecond line" :text "two\nlines"))
+  "A thread two replies deep and a note marking two lines.")
+
+(ert-deftest scholia-export-compact-gives-each-annotation-a-line ()
+  "Replies set in by depth; marked text over several lines goes fenced."
+  (let ((scholia-export-directory "/p/"))
+    (should (equal (scholia-export-compact scholia-export-test--thread "/p/src/app.typ")
+                   (string-join
+                    '("- src/app.typ:16:1-24 — Hi"
+                      "  > #set par(justify: false)"
+                      "  ↳ ben: Why?"
+                      "    ↳ Width."
+                      "- src/app.typ:3:3-4:11 — two"
+                      "  lines"
+                      "  > first"
+                      "  > second line")
+                    "\n")))))
+
+(ert-deftest scholia-export-compact-leaves-no-blank-tail ()
+  (should (equal (scholia-export-compact
+                  '((:id "b" :line 2 :column 0 :end-column 1
+                         :annotated-text "+" :text "\n\n\n"))
+                  "/p/a.el")
+                 "- /p/a.el:2:1-1 —\n  > +")))
+
+(ert-deftest scholia-export-compact-reads-through-its-templates ()
+  (let ((scholia-export-compact-entry "* %i %p%t :: %n")
+        (scholia-export-compact-reply "- %a%n")
+        (scholia-export-compact-quote nil))
+    (should (equal (scholia-export-compact (seq-take scholia-export-test--thread 2)
+                                           "/elsewhere/app.typ")
+                   (concat "* a1 /elsewhere/app.typ:16:1-24 `#set par(justify: false)`"
+                           " :: Hi\n  - ben: Why?")))))
+
+(ert-deftest scholia-export-section-heads-compact-and-fences-yaml ()
+  (let ((scholia-export-directory "/p/")
+        (entries (list (cons "/p/src/app.typ"
+                             (seq-take scholia-export-test--thread 3)))))
+    (should (equal (scholia-export-section entries 'compact "review" 'point)
+                   (string-join
+                    '("Scholia annotations · session review · scope point"
+                      "- src/app.typ:16:1-24 — Hi"
+                      "  > #set par(justify: false)"
+                      "  ↳ ben: Why?"
+                      "    ↳ Width.")
+                    "\n")))
+    (should (equal (scholia-export-section entries 'yaml "review" 'point)
+                   (string-join
+                    '("```yaml"
+                      "session: review"
+                      "scope: point"
+                      "annotations:"
+                      "  - at: src/app.typ:16:1-24"
+                      "    id: a1"
+                      "    text: \"#set par(justify: false)\""
+                      "    note: Hi"
+                      "    replies:"
+                      "      - id: r1"
+                      "        author: ben"
+                      "        note: Why?"
+                      "        replies:"
+                      "          - id: r2"
+                      "            note: Width."
+                      "```")
+                    "\n")))))
+
+(ert-deftest scholia-export-yaml-quotes-what-would-read-as-something-else ()
+  (should (equal (scholia-export--yaml-scalar "Hi there" 0) "Hi there"))
+  (should (equal (scholia-export--yaml-scalar "yes" 0) "\"yes\""))
+  (should (equal (scholia-export--yaml-scalar "42" 0) "\"42\""))
+  (should (equal (scholia-export--yaml-scalar "a: b" 0) "\"a: b\""))
+  (should (equal (scholia-export--yaml-scalar "src/app.typ:16:1-24" 0) "src/app.typ:16:1-24"))
+  (should (equal (scholia-export--yaml-scalar "#tag" 0) "\"#tag\""))
+  (should (equal (scholia-export--yaml-scalar "one\ntwo" 4) "|-\n      one\n      two")))
+
 (ert-deftest scholia-export-rustc-renders-a-diagnostic-carrying-the-id ()
   (scholia-test-with-temp-file-buffer _buffer scholia-export-test--source
     (should (equal (scholia-export-render

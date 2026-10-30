@@ -20,6 +20,7 @@
 ;;; Code:
 
 (require 'seq)
+(require 'format-spec)
 (require 'scholia-vars)
 (require 'scholia-db)
 (require 'scholia-thread)
@@ -65,14 +66,29 @@ out from under it."
                   (buffer-substring-no-properties (point-min) (point-max)))
                 "\n"))
 
+(defvar scholia-export-directory nil
+  "Directory a rendering names files relative to, or nil for absolute names.
+A consumer binds it to where the reader of the rendering works, such as
+an agent's directory.  A file outside it keeps its absolute name.")
+
+(defun scholia-export--relative (name)
+  "Return NAME relative to `scholia-export-directory' where it lies below it."
+  (let ((relative (and scholia-export-directory (file-name-absolute-p name)
+                       (file-relative-name name scholia-export-directory))))
+    (if (and relative (not (string-prefix-p ".." relative)))
+        relative
+      name)))
+
 (defun scholia-export--name (file-or-buffer)
   "Return the name a rendering gives FILE-OR-BUFFER.
 A buffer visiting no file answers with its own name, so an annotation
 made in a scratch buffer still renders somewhere."
   (if (stringp file-or-buffer)
-      file-or-buffer
+      (scholia-export--relative file-or-buffer)
     (with-current-buffer (scholia-export--source-buffer file-or-buffer)
-      (or (buffer-file-name) (buffer-name)))))
+      (if (buffer-file-name)
+          (scholia-export--relative (buffer-file-name))
+        (buffer-name)))))
 
 
 ;;;; Threads
@@ -397,10 +413,198 @@ as `---' or `@@' would be parsed as patch of its own."
 
 ;;;; Dispatch
 
+
+;;;; The compact format
+
+(defun scholia-export--place (annotation name)
+  "Return NAME with where ANNOTATION sits in it, LINE:COLUMN-END.
+Columns count from 1, as an editor shows them.  The end is where the
+marked text ends, on a line of its own where that text runs over
+several.  NAME stands alone for an annotation holding no place."
+  (let ((line (scholia-db-annotation-line annotation))
+        (column (scholia-db-annotation-column annotation))
+        (marked (scholia-export--lines
+                 (scholia-db-annotation-annotated-text annotation))))
+    (if (not (and (integerp line) (integerp column)))
+        name
+      (format "%s:%d:%d-%s" name line (1+ column)
+              (if (cdr marked)
+                  (format "%d:%d" (+ line (1- (length marked)))
+                          (length (car (last marked))))
+                (max (1+ column) (scholia-db-annotation-end-column annotation)))))))
+
+(defun scholia-export--compact-line (template annotation name indent)
+  "Return ANNOTATION of NAME through TEMPLATE, set in by INDENT columns.
+The note's further lines follow under it, and then the text it marks,
+each line behind `scholia-export-compact-quote'."
+  (let* ((pad (make-string indent ?\s))
+         (note (scholia-export--lines
+                (string-trim-right (or (scholia-db-annotation-text annotation) ""))))
+         (marked (scholia-db-annotation-annotated-text annotation))
+         (several (and marked (string-search "\n" marked)))
+         (author (scholia-db-annotation-author annotation)))
+    (string-join
+     (append
+      (list (string-trim-right
+             (concat pad
+                     (format-spec
+                      template
+                      `((?p . ,(if name (scholia-export--place annotation name) ""))
+			(?t . ,(if (and marked (not several)
+					(not (string-empty-p marked)))
+                                   (format " `%s`" marked)
+                                 ""))
+			(?n . ,(car note))
+			(?a . ,(if author (concat author ": ") ""))
+			(?i . ,(scholia-db-annotation-id annotation)))))))
+      (mapcar (lambda (line) (string-trim-right (concat pad "  " line))) (cdr note))
+      (and scholia-export-compact-quote marked (not (string-empty-p marked))
+           (mapcar (lambda (line)
+                     (string-trim-right
+                      (concat pad "  " scholia-export-compact-quote line)))
+                   (scholia-export--lines marked))))
+     "\n")))
+
+(defun scholia-export-compact (annotations &optional file-or-buffer)
+  "Return ANNOTATIONS against FILE-OR-BUFFER one line each.
+Each thread's root reads through `scholia-export-compact-entry' and its
+replies through `scholia-export-compact-reply', set in by their depth;
+a reply whose annotation is not among ANNOTATIONS reads as an entry of
+its own."
+  (let ((name (scholia-export--name file-or-buffer))
+        (threads (scholia-export--threads annotations)))
+    (string-join
+     (mapcar
+      (lambda (thread)
+        (string-join
+         (mapcar (pcase-lambda (`(,annotation . ,depth))
+                   (if (zerop depth)
+                       (scholia-export--compact-line
+                        scholia-export-compact-entry annotation
+                        name 0)
+                     (scholia-export--compact-line
+                      scholia-export-compact-reply annotation nil (* 2 depth))))
+                 thread)
+         "\n"))
+      (append (car threads) (cdr threads)))
+     "\n")))
+
+
+;;;; The YAML format
+
+(defun scholia-export--yaml-scalar (value indent)
+  "Return VALUE as a YAML scalar for a key set in by INDENT columns.
+Text of several lines goes as a literal block, and text YAML would read
+as something else is quoted."
+  (cond
+   ((null value) "null")
+   ((integerp value) (number-to-string value))
+   ((string-search "\n" value)
+    (concat "|-\n"
+            (mapconcat (lambda (line)
+                         (if (string-empty-p line)
+                             ""
+                           (concat (make-string (+ indent 2) ?\s) line)))
+                       (split-string value "\n") "\n")))
+   ((and (string-match-p "\\`[[:alnum:]/._]" value)
+         (not (string-match-p ": \\| #\\|[: \t]\\'" value))
+         (not (string-match-p
+               "\\`\\(?:true\\|false\\|null\\|yes\\|no\\|on\\|off\\|[-+.0-9e]+\\)\\'"
+               (downcase value))))
+    value)
+   (t (prin1-to-string value))))
+
+(defun scholia-export--yaml-item (fields indent)
+  "Return FIELDS as one YAML list item set in by INDENT columns.
+FIELDS are key and value conses; a nil value is left out."
+  (let ((lines (delq nil
+                     (mapcar (pcase-lambda (`(,key . ,value))
+                               (when value
+                                 (format "%s%s: %s" (make-string (+ indent 2) ?\s)
+                                         key (scholia-export--yaml-scalar
+                                              value (+ indent 2)))))
+                             fields))))
+    (concat (make-string indent ?\s) "- "
+            (substring (car lines) (+ indent 2))
+            (mapconcat (lambda (line) (concat "\n" line)) (cdr lines) ""))))
+
+(defun scholia-export--yaml-items (annotations name indent)
+  "Return ANNOTATIONS of NAME as YAML list items set in by INDENT columns.
+A reply nests under the annotation it answers, in its `replies'."
+  (let ((threads (scholia-export--threads annotations))
+        (lines nil)
+        (depth-seen 0))
+    (dolist (thread (append (car threads) (cdr threads)))
+      (setq depth-seen 0)
+      (pcase-dolist (`(,annotation . ,depth) thread)
+        (let ((item-indent (+ indent (* 4 depth))))
+          (when (> depth depth-seen)
+            (push (concat (make-string (- item-indent 2) ?\s) "replies:") lines))
+          (setq depth-seen depth)
+          (push (scholia-export--yaml-item
+                 `(("at" . ,(and (zerop depth)
+                                 (scholia-export--place annotation name)))
+                   ("id" . ,(scholia-db-annotation-id annotation))
+                   ("reply_to" . ,(and (zerop depth)
+                                       (scholia-db-annotation-reply-to annotation)))
+                   ("author" . ,(scholia-db-annotation-author annotation))
+                   ("text" . ,(and (zerop depth)
+                                   (scholia-db-annotation-annotated-text annotation)))
+                   ("note" . ,(scholia-db-annotation-text annotation)))
+                 item-indent)
+                lines))))
+    (string-join (nreverse lines) "\n")))
+
+(defun scholia-export--fenced (yaml)
+  "Return YAML in a fence, so a reader takes it for what it is."
+  (concat "```yaml\n" yaml "\n```"))
+
+(defun scholia-export-yaml (annotations &optional file-or-buffer)
+  "Return ANNOTATIONS against FILE-OR-BUFFER as a fenced YAML list."
+  (scholia-export--fenced
+   (scholia-export--yaml-items annotations (scholia-export--name file-or-buffer) 0)))
+
+
+;;;; Sections
+
+(defun scholia-export-section (entries format session scope)
+  "Return ENTRIES rendered as FORMAT, taken from SESSION by SCOPE.
+ENTRIES are files, or buffers, consed onto their annotations.  The
+`compact' format opens with `scholia-export-compact-heading' and `yaml'
+carries SESSION and SCOPE as keys in one fenced document; any other
+format renders each file as it renders it alone."
+  (pcase format
+    ('compact
+     (string-join
+      (cons (format-spec scholia-export-compact-heading
+                         `((?s . ,session) (?S . ,(format "%s" scope))))
+            (mapcar (lambda (entry) (scholia-export-compact (cdr entry) (car entry)))
+                    entries))
+      "\n"))
+    ('yaml
+     (scholia-export--fenced
+      (string-join
+       (append
+        (list (format "session: %s" (scholia-export--yaml-scalar session 0))
+              (format "scope: %s" scope)
+              "annotations:")
+        (mapcar (lambda (entry)
+                  (scholia-export--yaml-items
+                   (cdr entry) (scholia-export--name (car entry)) 2))
+                entries))
+       "\n")))
+    (_
+     (string-join
+      (mapcar (lambda (entry) (scholia-export-render (cdr entry) format (car entry)))
+              entries)
+      "\n\n"))))
+
 (defcustom scholia-export-functions
   '((rustc . scholia-export-rustc)
     (diff . scholia-export-diff)
-    (integrate . scholia-export-integrate))
+    (integrate . scholia-export-integrate)
+    (compact . scholia-export-compact)
+    (yaml . scholia-export-yaml))
   "Alist mapping a format symbol to the function rendering it.
 Each function takes the annotations to render and, optionally, the file
 or buffer they were taken against, and returns a string."

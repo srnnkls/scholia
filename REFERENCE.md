@@ -180,6 +180,10 @@ Module `scholia-herdr`, loaded with `(require 'scholia-herdr)`. Requires
 | `scholia-herdr-send-file` | every annotation of the current file, placed or not |
 | `scholia-herdr-send-session` | every annotation of a session |
 
+`scholia-herdr-annotations` returns the annotations a send of `point`, `region`, `file` or
+`session` would carry from the current buffer, replies included and grouped by file, without
+sending or recording them.
+
 ## Integration setup
 
 Each setup function can run more than once; its teardown undoes it. None is interactive.
@@ -267,7 +271,7 @@ All options belong to the customization group `scholia`.
 | `scholia-note-placement` | `beside` or `below` | `beside` | draw notes to the right of the last annotated line, or under it |
 | `scholia-annotation-column` | natural number | 85 | column a note starts at when placed `beside` |
 | `scholia-note-width` | nil or natural number | 80 | widest a note line may be, indentation included; nil for the window's width |
-| `scholia-session-colors` | list of colours | `#F5DD8E` `#8EF5DD` `#DD8EF5` `#CFF58E` `#F5988E` `#8EADF5` | session colours, claimed in order |
+| `scholia-session-colors` | list of colours | `#E5C07B` `#8EF5DD` `#DD8EF5` `#CFF58E` `#F5988E` `#8EADF5` | session colours, claimed in order; set with `setopt` or Customize, shown annotations take them at once |
 | `scholia-dark-theme-shade` | natural number | 12 | percent of lightness session colours lose on a dark theme |
 | `scholia-emphasis-shade` | natural number | 30 | percent the annotation under point deepens |
 | `scholia-reply-tint-step` | float | 0.35 | share of saturation a reply loses per level |
@@ -299,10 +303,14 @@ All options belong to the customization group `scholia`.
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `scholia-export-format` | `rustc`, `diff` or `integrate` | `rustc` | format of `scholia-export` and `scholia-export-session` |
-| `scholia-export-functions` | alist of symbol and function | `rustc`, `diff`, `integrate` renderers | format symbols and the functions rendering them |
+| `scholia-export-format` | `rustc`, `diff`, `integrate`, `compact` or `yaml` | `rustc` | format of `scholia-export` and `scholia-export-session` |
+| `scholia-export-functions` | alist of symbol and function | `rustc`, `diff`, `integrate`, `compact`, `yaml` renderers | format symbols and the functions rendering them |
+| `scholia-export-compact-heading` | string | `Scholia annotations · session %s · scope %S` | heading of a `compact` send; `%s` session, `%S` scope |
+| `scholia-export-compact-entry` | string | `- %p — %n` | line of an annotation; `%p` place, `%n` note, `%a` author, `%i` id, `%t` marked text inline |
+| `scholia-export-compact-reply` | string | `↳ %a%n` | line of a reply, set in by its depth; the entry's specs |
+| `scholia-export-compact-quote` | nil or string | `> ` | prefix of each line of the marked text under an entry; nil leaves it out |
 | `scholia-herdr-default-target` | nil or string | nil | herdr agent or pane to send to without asking |
-| `scholia-herdr-send-format` | nil or format symbol | nil | format for herdr sends; nil follows `scholia-export-format` |
+| `scholia-herdr-send-format` | nil or format symbol | `compact` | format of herdr sends and Limen's message field; nil follows `scholia-export-format` |
 | `scholia-use-messages` | boolean | t | report actions in the echo area |
 
 A function in `scholia-export-functions` takes the annotations and, optionally, the file or buffer
